@@ -1,0 +1,59 @@
+{
+  "name": "@cereb/jira-openclaw-plugin",
+  "version": "0.3.2",
+  "type": "module",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "jira-tool": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md",
+    "skills"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "jira",
+    "atlassian",
+    "openclaw"
+  ],
+  "description": "OpenClaw native plugin for Jira Cloud REST API v3 (replaces mcporter atlassian channel)",
+  "peerDependencies": {
+    "openclaw": ">=2026.3.24-beta.2"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "typebox": "^1.1.38",
+    "undici": "^7.27.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.2",
+    "openclaw": "latest",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  }
+}

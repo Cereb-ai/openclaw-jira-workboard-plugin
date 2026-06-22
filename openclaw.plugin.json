@@ -1,0 +1,40 @@
+{
+  "id": "jira-openclaw-plugin",
+  "name": "Jira",
+  "description": "OpenClaw native plugin for Jira Cloud REST API v3. Single dispatcher tool `jira` exposes search/get/create/update/comment/transition methods. Reads ATST_TOKEN / JIRA_CLOUD_ID / JIRA_PROXY from env (independent from mcporter).",
+  "version": "0.1.0",
+  "skills": [
+    "./skills"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "atstToken": {
+        "type": "string",
+        "description": "(optional) Override ATST_TOKEN env var"
+      },
+      "cloudId": {
+        "type": "string",
+        "description": "(optional) Override JIRA_CLOUD_ID env var"
+      },
+      "proxy": {
+        "type": "string",
+        "description": "(optional) Override JIRA_PROXY env var"
+      }
+    }
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "jira"
+    ]
+  },
+  "toolMetadata": {
+    "jira": {
+      "optional": true
+    }
+  }
+}
