@@ -3,7 +3,7 @@ name: jira
 description: OpenClaw jira 云原生插件. 提供两条调用路径:
   1) OpenClaw 原生 tool `jira` (agent 默认)
   2) 独立 CLI `jira-tool` (OpenCode / 任意 shell, 不依赖 OpenClaw)
-  9 个 method: 3 只读 (search/get/comment) + 5 原子任务操作 (create_task/create_subtask/submit_verdict/abandon_task/request_help) + 1 通用操作 (transition). 0.3.4 移除 escalate_task (deprecated alias 已彻底清除). 触发词:
+  9 个 method: 3 只读 (search/get/comment) + 5 原子任务操作 (create_task/create_subtask/submit_verdict/abandon_task/request_help) + 1 通用操作 (transition). 触发词:
 metadata:
   {
     "openclaw": { "emoji": "🎫" },
@@ -185,7 +185,7 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
      }
    } }
 // → ADF 文档评论，不改状态/labels/assignee
-// body 必须是 ADF dict (string body 在 0.3.4+ 不再支持 markdown 转换)
+// body 必须是 ADF dict
 ```
 
 ---
@@ -198,7 +198,7 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 
 3. **`request_help` 后 pipeline 自动跳过该 ticket**（含 `wait-approval` label）。人处理完后**手动移除 `wait-approval`**，下一轮 cron 自动接管——不需要 agent 调 method.
 
-4. **`comment` body 必须是 ADF dict** (`{version:1, type:"doc", content:[...]}`), 不接受字符串 + `adf: true` 转换 (0.3.4 移除). `@mention` 需要 ADF `mention` 节点 + `accountId` (使用 `mentionMap` 参数做双射校验).
+4. **`comment` body 必须是 ADF dict** (`{version:1, type:"doc", content:[...]}`). `@mention` 需要 ADF `mention` 节点 + `accountId` (使用 `mentionMap` 参数做双射校验).
 
 5. **未设 `ATST_TOKEN` / `JIRA_CLOUD_ID` env → fail-fast** 返清晰错误，不会静默退化.
 
