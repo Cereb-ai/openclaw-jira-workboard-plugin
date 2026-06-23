@@ -10,7 +10,7 @@ metadata:
   }
 ---
 
-# Jira Plugin Skill (0.3.1)
+# Jira Plugin Skill
 
 > 插件暴露 9 个 method，其中 5 个是原子任务操作——每个 method 内部完成多步 Jira API 调用，agent 不需要自行组合底层操作。`comment` 是只读/轻写 method，用于给 ticket 加评论（Phase 计划、进度同步等），不走 5 个原子模板。`transition` 是通用状态流转 method，pipeline 内部使用，agent 一般不需手动调。
 
@@ -42,7 +42,7 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 
 ---
 
-## 9 method 速查 (0.3.4)
+## 9 method 速查
 
 ### 只读 (3)
 
@@ -70,7 +70,7 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 > ops: "✅ 部署/配置/环境排查\n❌ 不改业务代码"
 > analyze: "✅ 代码分析、定位问题、出报告\n❌ 不修代码、不部署"
 >
-> ⚠️ **0.3.3+ scope 改必填**：未传 `scope` 或传空串 → create_task / create_subtask 返回
+> ⚠️ **scope 必填**：未传 `scope` 或传空串 → create_task / create_subtask 返回
 > 错误 `create_X requires scope (string, non-empty)`。主任务 + 子任务 description 都会
 > 渲染 `## 职责范围` 节，缺失视为模板违反。
 > `create_subtask` 可选 `block` 参数: `{ blocks: ["WTO-97"], blockedBy: ["WTO-95"] }`
@@ -192,7 +192,7 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 
 ## ⚠️ 避坑清单
 
-1. **`submit_verdict.verdict` 必须是 `PASS` / `FAIL` 之一**，其他值 → fail-fast.  过去 0.2.x 有 `BLOCKED`，0.3.3+ 移除（外部阻塞也是 FAIL，reason 写清被阻塞）。
+1. **`submit_verdict.verdict` 必须是 `PASS` / `FAIL` 之一**，其他值 → fail-fast.
 
 2. **`
 
