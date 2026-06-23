@@ -2,7 +2,7 @@
  * jira.request_help — orchestrator asks a human for guidance (0.3.0+).
  *
  * Limited to MAIN tasks (issuetype.subtask === false) — for subtasks use
- * escalate_task instead. Flow:
+ * submit_verdict({verdict:FAIL, reason}) instead. Flow:
  *
  *   1. GET /rest/api/3/issue/{key}        → verify it's a main task
  *      (subtask? → fail-fast, "request_help 只能用于主任务")
@@ -88,7 +88,7 @@ export async function requestHelp(
   if (!isMainTask) {
     return textResult({
       error:
-        `request_help 只能用于主任务。${issueIdOrKey} is a subtask — use escalate_task instead.`,
+        `request_help 只能用于主任务。${issueIdOrKey} is a subtask — use submit_verdict({verdict:FAIL, reason}) instead.`,
     });
   }
 

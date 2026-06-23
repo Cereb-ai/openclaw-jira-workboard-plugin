@@ -1,9 +1,9 @@
 /**
  * jira.submit_verdict — close out a task with verdict + transition (0.3.0+).
  *
- * Verdict dispatches to two flows:
+ * Verdict dispatches to two flows (verdict ∈ {PASS, FAIL}, 0.3.3+ 移除 BLOCKED):
  *
- *   PASS / BLOCKED
+ *   PASS
  *     1. POST  /rest/api/3/issue/{key}/comment  (verdict + summary + evidence)
  *     2. GET+POST /rest/api/3/issue/{key}/transitions  (→ "已完成")
  *
@@ -94,7 +94,7 @@ export async function submitVerdict(args) {
 }
 /**
  * FAIL continuation: add the "escalated" label and clear the assignee.
- * Mirrors escalate_task step 3+4 (post-comment, since step 1 just ran).
+ * Mirrors what escalate_task used to do in step 3+4 (label + assignee clear after comment).
  */
 async function escalateAfterComment(cfg, issueIdOrKey, commentId, commentSelf) {
     let labelOk = false;

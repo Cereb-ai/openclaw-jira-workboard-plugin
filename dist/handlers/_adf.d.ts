@@ -2,7 +2,7 @@
  * Shared ADF builders for the orchestrator handler set (0.3.0+).
  *
  * Centralises the document shape used by create_task / create_subtask
- * (description) and submit_verdict / escalate_task / request_help (comment
+ * (description) and submit_verdict / request_help (comment
  * bodies). The shape is opinionated — heading2 + paragraph + orderedList —
  * because the whole point of the new methods is to lock the orchestrator
  * template into the API surface so agents can't drift from it.
@@ -54,7 +54,7 @@ export declare function buildTaskDescription(requirements: string, scope: string
  */
 export declare function buildCompleteComment(verdict: "PASS" | "FAIL", summary: string, evidence: string, reason?: string): AdfDocument;
 /**
- * Build the escalation-comment ADF for escalate_task.
+ * Build the FAIL-verdict comment ADF for submit_verdict.
  *
  *   ## Escalated
  *   <reason>

@@ -82,7 +82,7 @@ export function buildCompleteComment(verdict, summary, evidence, reason = "") {
     return { version: 1, type: "doc", content };
 }
 /**
- * Build the escalation-comment ADF for escalate_task.
+ * Build the FAIL-verdict comment ADF for submit_verdict.
  *
  *   ## Escalated
  *   <reason>

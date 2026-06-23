@@ -1,23 +1,23 @@
 /**
- * Single-tool dispatcher for the Jira plugin (0.3.1 method set).
+ * Single-tool dispatcher for the Jira plugin (0.3.4 method set).
  *
  * Three invocation shapes (all equivalent):
  *   1. Structured:  { method: "search", args: { jql: "..." } }
  *   2. Stringified: { call: "search {\"jql\":\"...\"}" }
  *   3. Alias:       { method: "search", jql: "..." }
  *
- * Exposed methods (10):
+ * Exposed methods (9):
  *   Read-only:   search / get / comment
  *   Atomic actions: create_task / create_subtask / submit_verdict /
- *                   escalate_task / abandon_task / request_help
+ *                   abandon_task / request_help
  *   Generic:     transition
  *
- * All 6 atomic methods lock in templates, defaults, and multi-step
+ * All 5 atomic methods lock in templates, defaults, and multi-step
  * sequences so the orchestrator agent never composes raw Jira calls.
  *
- * escalate_task is a deprecated alias for submit_verdict({verdict:FAIL,
- * reason, summary}). It still works (back-compat with prior versions)
- * but new callers should use submit_verdict directly.
+ * verdict dispatches both PASS and FAIL in submit_verdict; there is no
+ * separate escalate_task. Main task can still pause via request_help
+ * (wait-approval label) without going through an escalation path.
  */
 import type { ToolResult } from "./types.js";
 import { search } from "./handlers/search.js";
@@ -26,12 +26,9 @@ import { comment } from "./handlers/comment.js";
 import { createTask } from "./handlers/create_task.js";
 import { createSubtask } from "./handlers/create_subtask.js";
 import { submitVerdict } from "./handlers/submit_verdict.js";
-import { escalateTask } from "./handlers/escalate_task.js";
 import { abandonTask } from "./handlers/abandon_task.js";
 import { requestHelp } from "./handlers/request_help.js";
 import { transition } from "./handlers/transition.js";
-import { loadConfig } from "./auth.js";
-import { jiraGet, JiraHttpError } from "./http.js";
 
 export const MVP_METHODS = [
   "search",
@@ -40,7 +37,6 @@ export const MVP_METHODS = [
   "create_task",
   "create_subtask",
   "submit_verdict",
-  "escalate_task",
   "abandon_task",
   "request_help",
   "transition",
@@ -79,26 +75,6 @@ export function dispatch(input: DispatchInput): Promise<ToolResult> {
       return createSubtask(normalized.args);
     case "submit_verdict":
       return submitVerdict(normalized.args);
-    case "escalate_task":
-      // Deprecated alias: forwards to submit_verdict(verdict=FAIL) so the
-      // single FAIL path (comment + label + clear assignee) lives in one
-      // place. Kept for back-compat with callers still using the old name.
-      //
-      // Backward-compat guard (SSSS-254 S1 fix): the old escalateTask
-      // handler checked fields.issuetype.subtask === true and fail-fast
-      // when called on a main task. We preserve that contract here so
-      // existing callers (e.g., SSSS-208 review tasks that rely on
-      // "escalate_task is subtask-only") keep working unchanged.
-      return assertSubtaskOnly(normalized.args.issueIdOrKey).then(
-        (guard) => {
-          if (guard) return guard;
-          return submitVerdict({
-            ...normalized.args,
-            verdict: "FAIL",
-            summary: normalized.args.summary ?? normalized.args.reason,
-          });
-        },
-      );
     case "abandon_task":
       return abandonTask(normalized.args);
     case "request_help":
@@ -108,46 +84,61 @@ export function dispatch(input: DispatchInput): Promise<ToolResult> {
     default:
       return Promise.resolve(
         textResult({
-          error: `Unknown method "${normalized.method}". ${MVP_METHODS.length} methods: ${MVP_METHODS.join(", ")}.`,
+          error:
+            `Unknown method "${normalized.method}". ` +
+            `${MVP_METHODS.length} methods: ${MVP_METHODS.join(", ")}. ` +
+            "See skills/jira/SKILL.md for per-method guidance.",
         }),
       );
   }
 }
 
-function normalizeCall(
-  input: DispatchInput,
-): { method: string; args: Record<string, unknown> } | null {
-  if (typeof input.method === "string" && input.method.length > 0) {
-    return {
-      method: input.method,
-      args: isRecord(input.args) ? input.args : {},
-    };
-  }
-  if (typeof input.call === "string") {
-    return parseCallString(input.call);
-  }
-  return null;
+interface NormalizedCall {
+  method: JiraMethod;
+  args: Record<string, unknown>;
 }
 
-function parseCallString(
-  raw: string,
-): { method: string; args: Record<string, unknown> } | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  // "method {\"foo\":1}"  — first whitespace separates method from optional json
-  const m = trimmed.match(/^(\S+?)(?:\s+(\{[\s\S]*\}))?$/);
-  if (!m) return null;
-  const [, method, json] = m;
-  let args: Record<string, unknown> = {};
-  if (json) {
-    try {
-      const parsed = JSON.parse(json);
-      if (isRecord(parsed)) args = parsed;
-    } catch {
-      args = {};
+function normalizeCall(input: DispatchInput): NormalizedCall | null {
+  let method: string | undefined = input.method;
+  let args: Record<string, unknown> = input.args ?? {};
+
+  // {call: "method {...}"} stringified shape
+  if (!method && typeof input.call === "string") {
+    const trimmed = input.call.trim();
+    const spaceIdx = trimmed.search(/\s/);
+    if (spaceIdx === -1) {
+      method = trimmed;
+    } else {
+      method = trimmed.slice(0, spaceIdx);
+      const json = trimmed.slice(spaceIdx + 1).trim();
+      try {
+        const parsed = JSON.parse(json);
+        if (isRecord(parsed)) args = parsed;
+      } catch {
+        args = {};
+      }
     }
   }
-  return { method, args };
+
+  // Alias shape: {method: "search", jql: "..."} — copy non-meta keys into args.
+  if (method && (!input.args || Object.keys(input.args).length === 0)) {
+    const reserved = new Set(["method", "args", "call"]);
+    const aliasArgs: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(input)) {
+      if (!reserved.has(k)) aliasArgs[k] = v;
+    }
+    if (Object.keys(aliasArgs).length > 0) args = aliasArgs;
+  }
+
+  if (typeof method !== "string" || method.length === 0) return null;
+  if (!isJiraMethod(method)) {
+    return null;
+  }
+  return { method: method as JiraMethod, args };
+}
+
+function isJiraMethod(m: string): m is JiraMethod {
+  return (MVP_METHODS as readonly string[]).includes(m);
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -160,45 +151,4 @@ export function textResult(data: unknown): ToolResult {
     content: [{ type: "text", text }],
     details: data,
   };
-}
-
-/**
- * Subtask-only guard for the deprecated escalate_task alias.
- *
- * The old escalateTask handler (0.3.0+) fail-fast when called on a
- * main task with "use request_help instead". We preserve that contract
- * here so existing callers don't silently escalate non-subtask issues
- * after the SSSS-252 merge.
- *
- * Returns null when the issue is a subtask (proceed with the alias
- * forwarding), or a ToolResult error envelope when it isn't.
- */
-async function assertSubtaskOnly(
-  issueIdOrKey: unknown,
-): Promise<ToolResult | null> {
-  if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
-    return textResult({
-      error:
-        "escalate_task requires a non-empty `issueIdOrKey` (string).",
-    });
-  }
-  try {
-    const cfg = loadConfig();
-    const data = (await jiraGet(cfg, `issue/${issueIdOrKey}`, {
-      fields: "issuetype",
-    })) as { fields?: { issuetype?: { subtask?: boolean; name?: string } } };
-    const isSubtask = data?.fields?.issuetype?.subtask === true;
-    if (!isSubtask) {
-      return textResult({
-        error:
-          `escalate_task 只能用于子任务。${issueIdOrKey} is a main task — use request_help instead.`,
-      });
-    }
-    return null;
-  } catch (err) {
-    const msg = err instanceof JiraHttpError ? err.message : String(err);
-    return textResult({
-      error: `escalate_task (subtask guard) failed: ${msg}.`,
-    });
-  }
 }
