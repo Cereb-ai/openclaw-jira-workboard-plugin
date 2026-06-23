@@ -2,7 +2,7 @@
  * jira.abandon_task — discard a subtask during re-planning (0.3.1+).
  *
  * Called by the plan agent when the main task is re-planned and existing
- * subtasks are no longer needed.  Semantic difference from complete_task:
+ * subtasks are no longer needed.  Semantic difference from submit_verdict:
  * "abandon" = 放弃/废弃 (the work was NOT done); "complete" = 完成 (done).
  *
  * Steps:
@@ -69,7 +69,7 @@ export async function abandonTask(
   if (!isSubtask) {
     return textResult({
       error:
-        `abandon_task 只能用于子任务。${issueIdOrKey} is a main task — use complete_task instead.`,
+        `abandon_task 只能用于子任务。${issueIdOrKey} is a main task — use submit_verdict instead.`,
     });
   }
 

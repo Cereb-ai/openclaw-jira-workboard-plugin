@@ -8,19 +8,19 @@
  *
  * Exposed methods (10):
  *   Read-only:   search / get / comment
- *   Atomic actions: create_task / create_subtask / complete_task /
+ *   Atomic actions: create_task / create_subtask / submit_verdict /
  *                   escalate_task / abandon_task / request_help
  *   Generic:     transition
  *
  * All 6 atomic methods lock in templates, defaults, and multi-step
  * sequences so the orchestrator agent never composes raw Jira calls.
  *
- * escalate_task is a deprecated alias for complete_task({verdict:FAIL,
+ * escalate_task is a deprecated alias for submit_verdict({verdict:FAIL,
  * reason, summary}). It still works (back-compat with prior versions)
- * but new callers should use complete_task directly.
+ * but new callers should use submit_verdict directly.
  */
 import type { ToolResult } from "./types.js";
-export declare const MVP_METHODS: readonly ["search", "get", "comment", "create_task", "create_subtask", "complete_task", "escalate_task", "abandon_task", "request_help", "transition"];
+export declare const MVP_METHODS: readonly ["search", "get", "comment", "create_task", "create_subtask", "submit_verdict", "escalate_task", "abandon_task", "request_help", "transition"];
 export type JiraMethod = (typeof MVP_METHODS)[number];
 export interface DispatchInput {
     method?: string;

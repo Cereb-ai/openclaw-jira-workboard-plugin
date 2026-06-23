@@ -43,9 +43,9 @@ export function buildTaskDescription(requirements, scope, acceptanceCriteria) {
     };
 }
 /**
- * Build the completion-comment ADF for complete_task.
+ * Build the completion-comment ADF for submit_verdict.
  *
- *   ## Verdict: <PASS|FAIL|BLOCKED>
+ *   ## Verdict: <PASS|FAIL>
  *   <summary>
  *
  *   ## Evidence
@@ -55,7 +55,7 @@ export function buildTaskDescription(requirements, scope, acceptanceCriteria) {
  *   <reason>             ← only when verdict=FAIL; mandatory for FAIL
  *                          but caller must pass non-empty string
  *
- * The caller (complete_task) is responsible for the FAIL invariants —
+ * The caller (submit_verdict) is responsible for the FAIL invariants —
  * we render whatever the caller passes. The Evidence section is the
  * standard "what was tried / observed" block (used for PASS); the Reason
  * section is the escalation note (used for FAIL).

@@ -8,16 +8,16 @@
  *
  * Exposed methods (10):
  *   Read-only:   search / get / comment
- *   Atomic actions: create_task / create_subtask / complete_task /
+ *   Atomic actions: create_task / create_subtask / submit_verdict /
  *                   escalate_task / abandon_task / request_help
  *   Generic:     transition
  *
  * All 6 atomic methods lock in templates, defaults, and multi-step
  * sequences so the orchestrator agent never composes raw Jira calls.
  *
- * escalate_task is a deprecated alias for complete_task({verdict:FAIL,
+ * escalate_task is a deprecated alias for submit_verdict({verdict:FAIL,
  * reason, summary}). It still works (back-compat with prior versions)
- * but new callers should use complete_task directly.
+ * but new callers should use submit_verdict directly.
  */
 import type { ToolResult } from "./types.js";
 import { search } from "./handlers/search.js";
@@ -25,7 +25,7 @@ import { get } from "./handlers/get.js";
 import { comment } from "./handlers/comment.js";
 import { createTask } from "./handlers/create_task.js";
 import { createSubtask } from "./handlers/create_subtask.js";
-import { completeTask } from "./handlers/complete_task.js";
+import { submitVerdict } from "./handlers/submit_verdict.js";
 import { escalateTask } from "./handlers/escalate_task.js";
 import { abandonTask } from "./handlers/abandon_task.js";
 import { requestHelp } from "./handlers/request_help.js";
@@ -39,7 +39,7 @@ export const MVP_METHODS = [
   "comment",
   "create_task",
   "create_subtask",
-  "complete_task",
+  "submit_verdict",
   "escalate_task",
   "abandon_task",
   "request_help",
@@ -77,10 +77,10 @@ export function dispatch(input: DispatchInput): Promise<ToolResult> {
       return createTask(normalized.args);
     case "create_subtask":
       return createSubtask(normalized.args);
-    case "complete_task":
-      return completeTask(normalized.args);
+    case "submit_verdict":
+      return submitVerdict(normalized.args);
     case "escalate_task":
-      // Deprecated alias: forwards to complete_task(verdict=FAIL) so the
+      // Deprecated alias: forwards to submit_verdict(verdict=FAIL) so the
       // single FAIL path (comment + label + clear assignee) lives in one
       // place. Kept for back-compat with callers still using the old name.
       //
@@ -92,7 +92,7 @@ export function dispatch(input: DispatchInput): Promise<ToolResult> {
       return assertSubtaskOnly(normalized.args.issueIdOrKey).then(
         (guard) => {
           if (guard) return guard;
-          return completeTask({
+          return submitVerdict({
             ...normalized.args,
             verdict: "FAIL",
             summary: normalized.args.summary ?? normalized.args.reason,

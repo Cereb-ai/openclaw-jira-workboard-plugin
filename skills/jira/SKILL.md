@@ -3,7 +3,7 @@ name: jira
 description: OpenClaw jira 云原生插件. 提供两条调用路径:
   1) OpenClaw 原生 tool `jira` (agent 默认)
   2) 独立 CLI `jira-tool` (OpenCode / 任意 shell, 不依赖 OpenClaw)
-  10 个 method: 3 只读 (search/get/comment) + 6 原子任务操作 (create_task/create_subtask/complete_task/escalate_task/abandon_task/request_help) + 1 通用操作 (transition). 触发词: "找 WTO-XXX"、"读 ticket"、"给 ticket 加评论"、"建主任务/子任务"、"完成任务"、"升级/废弃子任务"、"找人帮助"、"转状态".
+  10 个 method: 3 只读 (search/get/comment) + 6 原子任务操作 (create_task/create_subtask/submit_verdict/escalate_task/abandon_task/request_help) + 1 通用操作 (transition). 触发词: "找 WTO-XXX"、"读 ticket"、"给 ticket 加评论"、"建主任务/子任务"、"完成任务"、"升级/废弃子任务"、"找人帮助"、"转状态".
 metadata:
   {
     "openclaw": { "emoji": "🎫" },
@@ -58,8 +58,8 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 |---|---|---|---|---|
 | `create_task` | plan agent | 建主任务（锁定模板 + `plan` label + assignee） | `project`, `summary`, `requirements`, **`scope`**, `acceptance_criteria` | `labels` |
 | `create_subtask` | plan agent | 建子任务（锁定模板 + label + assignee + 可选 block） | `project`, `parent`, `summary`, `requirements`, **`scope`**, `acceptance_criteria`, `labels` | `block` |
-| `complete_task` | 主/子 agent | 任务完成（评论 verdict + 转「已完成」） | `issueIdOrKey`, `verdict`, `summary` |
-| `escalate_task` | 子任务 agent | 子任务做不了升级（评论 + `escalated` label + 清 assignee） | `issueIdOrKey`, `reason` |
+| `submit_verdict` | 主/子 agent | 提交判定：`verdict=PASS` 评论 + 转「已完成」；`verdict=FAIL` 评论 + `escalated` label + 清 assignee | `issueIdOrKey`, `verdict` (PASS\|FAIL), `summary` (string), `evidence` (可选), `reason` (FAIL 必填) |
+| `escalate_task` | 子任务 agent | **⚠️ 已废弃** — `submit_verdict({verdict:FAIL, reason})` 的别名，转调 submit_verdict（仅子任务）。新代码用 submit_verdict | `issueIdOrKey`, `reason` |
 | `abandon_task` | plan agent | 重新规划时废弃子任务（评论 + 清 assignee + 转「已完成」） | `issueIdOrKey`, `reason` |
 | `request_help` | plan agent | 主任务卡住找人（评论 + `wait-approval` label + 清 assignee） | `issueIdOrKey`, `question` |
 
@@ -74,7 +74,7 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 > 错误 `create_X requires scope (string, non-empty)`。主任务 + 子任务 description 都会
 > 渲染 `## 职责范围` 节，缺失视为模板违反。
 > `create_subtask` 可选 `block` 参数: `{ blocks: ["WTO-97"], blockedBy: ["WTO-95"] }`
-> `complete_task` 可选 `evidence` 参数（string，证据/截图路径）
+> `submit_verdict` 可选 `evidence` 参数（string，证据/截图路径）
 
 ### 通用操作 (1)
 
@@ -127,13 +127,13 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 ### 场景 4: 子任务完成
 
 ```
-1. jira { method: "complete_task", args: {
+1. jira { method: "submit_verdict", args: {
      issueIdOrKey: "WTO-100",
      verdict: "PASS",
      summary: "frontend 3 处代码改动生效，AC-007 Save 持久化通过",
      evidence: "screenshots/opp-score-ac007/06-reopen-config-modal.png"
    } }
-// verdict: PASS | FAIL | BLOCKED
+// verdict: PASS | FAIL
 ```
 
 ### 场景 5: 子任务做不了 → 升级
@@ -181,7 +181,7 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 
 ## ⚠️ 避坑清单
 
-1. **`complete_task.verdict` 必须是 `PASS` / `FAIL` / `BLOCKED` 之一**，其他值 → fail-fast.
+1. **`submit_verdict.verdict` 必须是 `PASS` / `FAIL` 之一**，其他值 → fail-fast.  过去 0.2.x 有 `BLOCKED`，0.3.3+ 移除（外部阻塞也是 FAIL，reason 写清被阻塞）。
 
 2. **`escalate_task` / `abandon_task` 只能作用于子任务**，传主任务 key → fail-fast 返清晰错误.
 
@@ -216,7 +216,7 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 | 加评论 | `jira {method:'comment', args:{issueIdOrKey:'WTO-70', body:'...', adf:true}}` |
 | 建主任务 | `jira {method:'create_task', args:{...}}` |
 | 建子任务 | `jira {method:'create_subtask', args:{...}}` |
-| 完成任务 | `jira {method:'complete_task', args:{...}}` |
+| 完成任务 | `jira {method:'submit_verdict', args:{...}}` |
 | 升级子任务 | `jira {method:'escalate_task', args:{...}}` |
 | 废弃子任务 | `jira {method:'abandon_task', args:{...}}` |
 | 找人帮助 | `jira {method:'request_help', args:{...}}` |

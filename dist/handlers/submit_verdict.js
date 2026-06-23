@@ -1,5 +1,5 @@
 /**
- * jira.complete_task — close out a task with verdict + transition (0.3.0+).
+ * jira.submit_verdict — close out a task with verdict + transition (0.3.0+).
  *
  * Verdict dispatches to two flows:
  *
@@ -29,7 +29,7 @@ import { textResult } from "../dispatch.js";
 import { buildCompleteComment } from "./_adf.js";
 const TARGET_STATUS = "已完成";
 const ESCALATED_LABEL = "escalated";
-export async function completeTask(args) {
+export async function submitVerdict(args) {
     let cfg;
     try {
         cfg = loadConfig();
@@ -40,19 +40,19 @@ export async function completeTask(args) {
     const issueIdOrKey = args.issueIdOrKey;
     if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
         return textResult({
-            error: "complete_task requires a non-empty `issueIdOrKey` (string).",
+            error: "submit_verdict requires a non-empty `issueIdOrKey` (string).",
         });
     }
     const verdict = args.verdict;
     if (verdict !== "PASS" && verdict !== "FAIL") {
         return textResult({
-            error: "complete_task requires `verdict` to be one of 'PASS' | 'FAIL'.",
+            error: "submit_verdict requires `verdict` to be one of 'PASS' | 'FAIL'.",
         });
     }
     const summary = args.summary;
     if (typeof summary !== "string" || summary.trim().length === 0) {
         return textResult({
-            error: "complete_task requires `summary` (string, non-empty).",
+            error: "submit_verdict requires `summary` (string, non-empty).",
         });
     }
     const evidence = typeof args.evidence === "string" ? args.evidence : "";
@@ -62,7 +62,7 @@ export async function completeTask(args) {
     if (verdict === "FAIL") {
         reason = typeof args.reason === "string" ? args.reason.trim() : "";
         if (reason.length === 0) {
-            throw new JiraPluginError(`complete_task(verdict=FAIL) requires non-empty \`reason\` (string). ` +
+            throw new JiraPluginError(`submit_verdict(verdict=FAIL) requires non-empty \`reason\` (string). ` +
                 `Reason documents why the task failed; the escalated label + cleared ` +
                 `assignee signal "human pickup" to the orchestrator.`);
         }
@@ -81,7 +81,7 @@ export async function completeTask(args) {
     catch (err) {
         const msg = err instanceof JiraHttpError ? err.message : errorMessage(err);
         return textResult({
-            error: `jira.complete_task (step 1: comment) failed: ${msg}. ` +
+            error: `jira.submit_verdict (step 1: comment) failed: ${msg}. ` +
                 "Transition was NOT executed. No side effect on the issue.",
         });
     }
@@ -108,13 +108,13 @@ async function escalateAfterComment(cfg, issueIdOrKey, commentId, commentSelf) {
         const msg = err instanceof JiraHttpError ? err.message : errorMessage(err);
         return textResult({
             ok: false,
-            method: "complete_task",
+            method: "submit_verdict",
             partial: true,
             verdict: "FAIL",
             comment: { id: commentId, self: commentSelf },
-            error: `jira.complete_task (verdict=FAIL, step 2: add label) failed: ${msg}. ` +
+            error: `jira.submit_verdict (verdict=FAIL, step 2: add label) failed: ${msg}. ` +
                 `Verdict comment was already posted; label was NOT added; assignee NOT cleared. ` +
-                `Re-run complete_task with the same args to retry — the comment step is idempotent at ` +
+                `Re-run submit_verdict with the same args to retry — the comment step is idempotent at ` +
                 `the UI level but will post a duplicate ADF comment on Jira.`,
         });
     }
@@ -129,20 +129,20 @@ async function escalateAfterComment(cfg, issueIdOrKey, commentId, commentSelf) {
         const msg = err instanceof JiraHttpError ? err.message : errorMessage(err);
         return textResult({
             ok: false,
-            method: "complete_task",
+            method: "submit_verdict",
             partial: true,
             verdict: "FAIL",
             comment: { id: commentId, self: commentSelf },
             label: ESCALATED_LABEL,
             hint: `Verdict comment + "${ESCALATED_LABEL}" label already applied. To finish, run: ` +
                 `jira { method: "update", args: { issueIdOrKey: "${issueIdOrKey}", fields: { assignee: null } } }`,
-            error: `jira.complete_task (verdict=FAIL, step 3: clear assignee) failed: ${msg}. ` +
+            error: `jira.submit_verdict (verdict=FAIL, step 3: clear assignee) failed: ${msg}. ` +
                 `Comment and label already applied; assignee NOT cleared.`,
         });
     }
     return textResult({
         ok: true,
-        method: "complete_task",
+        method: "submit_verdict",
         verdict: "FAIL",
         comment: { id: commentId, self: commentSelf },
         label: ESCALATED_LABEL,
@@ -173,20 +173,20 @@ async function completeTransition(cfg, issueIdOrKey, commentId, commentSelf, ver
         const msg = err instanceof JiraHttpError ? err.message : errorMessage(err);
         return textResult({
             ok: false,
-            method: "complete_task",
+            method: "submit_verdict",
             partial: true,
             comment: { id: commentId, self: commentSelf },
             hint: `Comment was posted (id=${commentId}) but the transition lookup failed: ${msg}. ` +
-                `Re-run the generic \`transition\` method to finish, or retry complete_task ` +
+                `Re-run the generic \`transition\` method to finish, or retry submit_verdict ` +
                 `if the failure was transient (be aware: this will post a duplicate comment).`,
-            error: `jira.complete_task (step 2a: list transitions) failed: ${msg}. ` +
+            error: `jira.submit_verdict (step 2a: list transitions) failed: ${msg}. ` +
                 `Comment was already posted.`,
         });
     }
     if (transitions.length === 0) {
         return textResult({
             ok: false,
-            method: "complete_task",
+            method: "submit_verdict",
             partial: true,
             comment: { id: commentId, self: commentSelf },
             error: `No transitions available for ${issueIdOrKey} — issue may be in a terminal state. ` +
@@ -199,7 +199,7 @@ async function completeTransition(cfg, issueIdOrKey, commentId, commentSelf, ver
         const available = transitions.map((t) => `${t.name} → ${t.to?.name ?? "?"}`);
         return textResult({
             ok: false,
-            method: "complete_task",
+            method: "submit_verdict",
             partial: true,
             comment: { id: commentId, self: commentSelf },
             error: `targetStatus "${TARGET_STATUS}" not in available transitions for ${issueIdOrKey}: [${available.join(", ")}]. ` +
@@ -213,7 +213,7 @@ async function completeTransition(cfg, issueIdOrKey, commentId, commentSelf, ver
         });
         return textResult({
             ok: true,
-            method: "complete_task",
+            method: "submit_verdict",
             comment: { id: commentId, self: commentSelf },
             transition: {
                 id: match.id,
@@ -232,12 +232,12 @@ async function completeTransition(cfg, issueIdOrKey, commentId, commentSelf, ver
         const msg = err instanceof JiraHttpError ? err.message : errorMessage(err);
         return textResult({
             ok: false,
-            method: "complete_task",
+            method: "submit_verdict",
             partial: true,
             comment: { id: commentId, self: commentSelf },
             hint: `Comment was posted (id=${commentId}) but the transition execute failed: ${msg}. ` +
                 `Use the generic \`transition\` method to move ${issueIdOrKey} to "${TARGET_STATUS}".`,
-            error: `jira.complete_task (step 2b: execute transition) failed: ${msg}. ` +
+            error: `jira.submit_verdict (step 2b: execute transition) failed: ${msg}. ` +
                 `Comment was already posted.`,
         });
     }

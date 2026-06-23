@@ -27,10 +27,10 @@ vi.mock("../auth.js", async (importOriginal) => {
 });
 
 import { jiraGet, jiraPost, jiraPut } from "../http.js";
-import { completeTask } from "../handlers/complete_task.js";
+import { submitVerdict } from "../handlers/submit_verdict.js";
 import { JiraPluginError } from "../auth.js";
 
-describe("complete_task FAIL escalation (SSSS-252)", () => {
+describe("submit_verdict FAIL escalation (SSSS-252)", () => {
   beforeEach(() => {
     vi.mocked(jiraGet).mockReset();
     vi.mocked(jiraPost).mockReset();
@@ -46,7 +46,7 @@ describe("complete_task FAIL escalation (SSSS-252)", () => {
     vi.mocked(jiraPut).mockResolvedValueOnce({}); // add label
     vi.mocked(jiraPut).mockResolvedValueOnce({}); // clear assignee
 
-    const result = await completeTask({
+    const result = await submitVerdict({
       issueIdOrKey: "TEST-1",
       verdict: "FAIL",
       summary: "tests failed",
@@ -74,7 +74,7 @@ describe("complete_task FAIL escalation (SSSS-252)", () => {
 
   it("AC-252-2: verdict=FAIL with empty reason → throws JiraPluginError (no side effect)", async () => {
     await expect(
-      completeTask({
+      submitVerdict({
         issueIdOrKey: "TEST-1",
         verdict: "FAIL",
         summary: "tests failed",
@@ -83,7 +83,7 @@ describe("complete_task FAIL escalation (SSSS-252)", () => {
     ).rejects.toThrow(JiraPluginError);
 
     await expect(
-      completeTask({
+      submitVerdict({
         issueIdOrKey: "TEST-1",
         verdict: "FAIL",
         summary: "tests failed",
@@ -99,7 +99,7 @@ describe("complete_task FAIL escalation (SSSS-252)", () => {
     vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" }); // comment OK
     vi.mocked(jiraPut).mockRejectedValueOnce(new Error("label 500")); // label fails
 
-    const result = await completeTask({
+    const result = await submitVerdict({
       issueIdOrKey: "TEST-1",
       verdict: "FAIL",
       summary: "tests failed",
@@ -126,7 +126,7 @@ describe("complete_task FAIL escalation (SSSS-252)", () => {
     });
     vi.mocked(jiraPost).mockResolvedValueOnce({}); // transition execute
 
-    const result = await completeTask({
+    const result = await submitVerdict({
       issueIdOrKey: "TEST-1",
       verdict: "PASS",
       summary: "all green",
@@ -142,22 +142,15 @@ describe("complete_task FAIL escalation (SSSS-252)", () => {
     expect(jiraPut).not.toHaveBeenCalled();
   });
 
-  it("AC-252-5: verdict=BLOCKED transitions (not escalated)", async () => {
-    vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" });
-    vi.mocked(jiraGet).mockResolvedValueOnce({
-      transitions: [{ id: "11", name: "Done", to: { name: "已完成" } }],
-    });
-    vi.mocked(jiraPost).mockResolvedValueOnce({});
-
-    const result = await completeTask({
+  it("AC-252-5: verdict=BLOCKED rejected (removed in 0.4.0)", async () => {
+    const result = await submitVerdict({
       issueIdOrKey: "TEST-1",
       verdict: "BLOCKED",
-      summary: "waiting for input",
+      summary: "should be rejected",
     });
     const parsed = JSON.parse((result.content[0].text as string));
-    expect(parsed.summary.verdict).toBe("BLOCKED");
-    expect(parsed.summary.transitionedTo).toBe("已完成");
-    expect(jiraPut).not.toHaveBeenCalled();
+    expect(parsed.error).toMatch(/verdict.*one of/);
+    expect(jiraPost).not.toHaveBeenCalled();
   });
 });
 
@@ -172,7 +165,7 @@ describe("dispatch escalate_task alias (SSSS-252)", () => {
     vi.clearAllMocks();
   });
 
-  it("AC-252-6: escalate_task → completeTask({verdict:FAIL, reason})", async () => {
+  it("AC-252-6: escalate_task → submitVerdict({verdict:FAIL, reason})", async () => {
     const { dispatch } = await import("../dispatch.js");
     // SSSS-254 S1 fix: alias now subtask-guards before forwarding, so the
     // test must mock jiraGet to return subtask=true for the guard to pass.
