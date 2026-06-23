@@ -1,14 +1,10 @@
 {
   "id": "jira-openclaw-plugin",
   "name": "Jira",
-  "description": "OpenClaw native plugin for Jira Cloud REST API v3. Single dispatcher tool `jira` exposes search/get/create/update/comment/transition methods. Reads ATST_TOKEN / JIRA_CLOUD_ID / JIRA_PROXY from env (independent from mcporter).",
-  "version": "0.1.0",
-  "skills": [
-    "./skills"
-  ],
+  "description": "Jira Cloud REST v3 native tools (9 methods, each is a named tool). Generic: jira_search / jira_get / jira_comment / jira_transition. Orchestrator: jira_create_task / jira_create_subtask / jira_submit_verdict / jira_abandon_task / jira_request_help. Reads ATST_TOKEN / JIRA_CLOUD_ID / JIRA_PROXY from env. See skills/jira/SKILL.md for per-tool guidance.",
+  "version": "0.4.0",
   "configSchema": {
     "type": "object",
-    "additionalProperties": false,
     "properties": {
       "atstToken": {
         "type": "string",
@@ -29,12 +25,15 @@
   },
   "contracts": {
     "tools": [
-      "jira"
+      "jira_search",
+      "jira_get",
+      "jira_comment",
+      "jira_create_task",
+      "jira_create_subtask",
+      "jira_submit_verdict",
+      "jira_abandon_task",
+      "jira_request_help",
+      "jira_transition"
     ]
-  },
-  "toolMetadata": {
-    "jira": {
-      "optional": true
-    }
   }
 }

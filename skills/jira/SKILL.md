@@ -1,9 +1,6 @@
 ---
 name: jira
-description: OpenClaw jira 云原生插件. 提供两条调用路径:
-  1) OpenClaw 原生 tool `jira` (agent 默认)
-  2) 独立 CLI `jira-tool` (OpenCode / 任意 shell, 不依赖 OpenClaw)
-  9 个 method: 3 只读 (search/get/comment) + 5 原子任务操作 (create_task/create_subtask/submit_verdict/abandon_task/request_help) + 1 通用操作 (transition). 触发词:
+description: OpenClaw jira 云原生插件. 9 个 named tools (jira_search / jira_get / jira_comment / jira_transition / jira_create_task / jira_create_subtask / jira_submit_verdict / jira_abandon_task / jira_request_help). 触发词:
 metadata:
   {
     "openclaw": { "emoji": "🎫" },
@@ -12,242 +9,129 @@ metadata:
 
 # Jira Plugin Skill
 
-> 插件暴露 9 个 method，其中 5 个是原子任务操作——每个 method 内部完成多步 Jira API 调用，agent 不需要自行组合底层操作。`comment` 是只读/轻写 method，用于给 ticket 加评论（Phase 计划、进度同步等），不走 5 个原子模板。`transition` 是通用状态流转 method，pipeline 内部使用，agent 一般不需手动调。
+> 插件暴露 9 个 named tools，每个 tool 对应一个 Jira Cloud REST v3 method。agent 直接调 named tool 即可，不需要 dispatcher 包装。comment / create_task / create_subtask / submit_verdict / abandon_task / request_help 内部完成多步 Jira API 调用，agent 不需要自行组合。
 
 ---
 
 ## 调用形态
 
-**结构化** (agent 默认, 优先):
-```json
-jira { "method": "search", "args": { "jql": "project = WTO AND status != Done" } }
-```
+**OpenClaw 原生 tool** (agent 默认) — 直接调 named tool:
 
-**字符串** (兼容 wecom_mcp 习惯):
 ```json
-jira { "call": "search {\"jql\":\"project = WTO\"}" }
-```
-
-**扁平** (简写):
-```json
-jira { "method": "search", "jql": "project = WTO" }
+jira_search { jql: "project = WTO AND status != Done" }
+jira_get { issueIdOrKey: "WTO-71" }
+jira_create_task { project: "WTO", summary: "...", requirements: "...", scope: "...", acceptance_criteria: ["..."] }
 ```
 
 **CLI 二进制** (OpenCode / 终端 / CI):
+
 ```bash
 jira-tool search '{"jql":"project = WTO AND status != Done"}'
 jira-tool get '{"issueIdOrKey":"WTO-71"}'
+jira-tool create_task '{"project":"WTO","summary":"...","requirements":"...","scope":"...","acceptance_criteria":["..."]}'
+jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"done"}'
 ```
+
 命令退出码: `0`=成功, `5`=业务错误, `2`=JSON 解析错, `1`=无参数.
 
 ---
 
-## 9 method 速查
+## 9 tool 速查
 
-### 只读 (3)
+### 通用 (4)
 
-| method | 用途 | 必填 | 常用选填 |
+| tool | 用途 | 必填 | 常用选填 |
 |---|---|---|---|
-| `search` | JQL 搜索 (默认 30 条) | `jql` | `maxResults`, `fields` |
-| `get` | 读单 ticket 详情 | `issueIdOrKey` | `fields` |
-| `comment` | 给 ticket 加评论 (ADF, 支持 @mention) | `issueIdOrKey`, `body` | `visibility`, `adf` |
+| `jira_search` | JQL 搜索 (默认 30 条) | `jql` | `maxResults`, `fields` |
+| `jira_get` | 读单 ticket 详情 | `issueIdOrKey` | `fields` |
+| `jira_comment` | 给 ticket 加评论 (ADF dict body) | `issueIdOrKey`, `body` | `mentionMap` |
+| `jira_transition` | 转 ticket 状态 (按目标状态名) | `issueIdOrKey`, `targetStatus` | — |
 
-### 原子任务操作 (6)
+### 原子任务操作 (5)
 
-| method | 谁调 | 用途 | 必填 | 选填 |
-|---|---|---|---|---|
-| `create_task` | plan agent | 建主任务（锁定模板 + `plan` label + assignee） | `project`, `summary`, `requirements`, **`scope`**, `acceptance_criteria` | `labels` |
-| `create_subtask` | plan agent | 建子任务（锁定模板 + label + assignee + 可选 block） | `project`, `parent`, `summary`, `requirements`, **`scope`**, `acceptance_criteria`, `labels` | `block` |
-| `submit_verdict` | 主/子 agent | 提交判定：`verdict=PASS` 评论 + 转「已完成」；`verdict=FAIL` 评论 + `escalated` label + 清 assignee | `issueIdOrKey`, `verdict` (PASS\|FAIL), `summary` (string), `evidence` (可选), `reason` (FAIL 必填) |
-| `
-| `abandon_task` | plan agent | 重新规划时废弃子任务（评论 + 清 assignee + 转「已完成」） | `issueIdOrKey`, `reason` |
-| `request_help` | plan agent | 主任务卡住找人（评论 + `wait-approval` label + 清 assignee） | `issueIdOrKey`, `question` |
-
-> `create_subtask` / `create_task` **`scope` 参数 (string, 必填)**:
-> 按 label 写 ✅ 负责 / ❌ 不负责。code: "✅ 写代码、跑测试、提 PR\n❌ 不部署（kubectl/gcloud/Cloud Build）、不 merge、不 review"
-> review: "✅ 审查 PR 代码改动、APPROVED 后 merge 到 dev\n❌ 不改代码、不部署"
-> test: "✅ 测试验证、出报告\n❌ 不修代码、不部署"
-> ops: "✅ 部署/配置/环境排查\n❌ 不改业务代码"
-> analyze: "✅ 代码分析、定位问题、出报告\n❌ 不修代码、不部署"
->
-> ⚠️ **scope 必填**：未传 `scope` 或传空串 → create_task / create_subtask 返回
-> 错误 `create_X requires scope (string, non-empty)`。主任务 + 子任务 description 都会
-> 渲染 `## 职责范围` 节，缺失视为模板违反。
-> `create_subtask` 可选 `block` 参数: `{ blocks: ["WTO-97"], blockedBy: ["WTO-95"] }`
-> `submit_verdict` 可选 `evidence` 参数（string，证据/截图路径）
-
-### 通用操作 (1)
-
-| method | 谁调 | 用途 | 必填 |
+| tool | 用途 | 必填 | 常用选填 |
 |---|---|---|---|
-| `transition` | pipeline / agent | 转 ticket 状态（按目标状态名） | `issueIdOrKey`, `targetStatus` |
-
-> `targetStatus` 用状态名（如 `In Progress` / `Done` / `已完成`），不是 transition button 上的文字。
+| `jira_create_task` | 建主任务 (锁定模板 + `plan` label + assignee) | `project`, `summary`, `requirements`, `scope`, `acceptance_criteria` | `labels` |
+| `jira_create_subtask` | 建子任务 (锁定模板 + label + assignee + 可选 block) | `project`, `parent`, `summary`, `requirements`, `scope`, `acceptance_criteria`, `labels` | `block` |
+| `jira_submit_verdict` | 提交判定: PASS 转「已完成」; FAIL 加 `escalated` label + 清 assignee | `issueIdOrKey`, `verdict` (PASS\|FAIL), `summary` | `reason` (FAIL 必填), `evidence` |
+| `jira_abandon_task` | 重新规划时废弃子任务 (评论 + 清 assignee + 转「已完成」) | `issueIdOrKey`, `reason` | — |
+| `jira_request_help` | 主任务卡住找人 (评论 + `wait-approval` label + 清 assignee) | `issueIdOrKey`, `question` | — |
 
 ---
 
-## 场景
+## 调用示例
 
-### 场景 1: 搜索 + 读取
-
+### 场景 1: 查 main 任务状态
 ```
-1. jira { method: "search", args: { jql: "project = WTO AND status != Done ORDER BY updated DESC", maxResults: 10 } }
-2. jira { method: "get", args: { issueIdOrKey: "WTO-110" } }
+jira_get { issueIdOrKey: "SSSS-241" }
 ```
 
-### 场景 2: 建主任务并开始规划
-
+### 场景 2: plan agent 写 Phase 计划评论
 ```
-1. jira { method: "create_task", args: {
-     project: "WTO",
-     summary: "Opp. Score 模块 E2E 测试",
-     requirements: "对 WTO 商机评分模块的 7 个 AC 进行端到端自动化测试",
-     scope: "✅ 测试验证、出报告\n❌ 不修代码、不部署",
-     acceptance_criteria: ["AC-001 ~ AC-007 全部 PASS", "截图 + 测试结果上传 Outline"]
-   } }
-// → 自动: plan label + assignee + ADF description (含 ## 职责范围)
-```
-
-### 场景 3: 拆解规划 → 建子任务 (含 scope + block 依赖)
-
-```
-1. jira { method: "create_subtask", args: {
-     project: "WTO",
-     parent: "WTO-99",
-     summary: "修复 Configuration Save 持久化",
-     requirements: "配置保存后 close+reopen 值未持久化",
-     scope: "✅ 写代码、跑测试、提 PR\n❌ 不部署、不 merge、不 review",
-     acceptance_criteria: ["w1 改为 0.7 后 close+reopen 仍为 0.7"],
-     labels: ["code"],
-     block: { blockedBy: ["WTO-95"] }
-   } }
-// scope 按 label 选择对应的职责文本
+jira_comment { issueIdOrKey: "SSSS-241", body: {
+  version: 1,
+  type: "doc",
+  content: [
+    {type: "heading", attrs: {level: 2}, content: [{type: "text", text: "Phase 拆解"}]},
+    {type: "bulletList", content: [
+      {type: "listItem", content: [{type: "paragraph", content: [{type: "text", text: "P1: 修 Save 持久化"}]}]},
+      {type: "listItem", content: [{type: "paragraph", content: [{type: "text", text: "P2: 接入 v3 auth"}]}]}
+    ]}
+  ]
+}}
 ```
 
-### 场景 4: 子任务完成
-
+### 场景 3: plan agent 建主任务
 ```
-1. jira { method: "submit_verdict", args: {
-     issueIdOrKey: "WTO-100",
-     verdict: "PASS",
-     summary: "frontend 3 处代码改动生效，AC-007 Save 持久化通过",
-     evidence: "screenshots/opp-score-ac007/06-reopen-config-modal.png"
-   } }
-// verdict: PASS | FAIL
+jira_create_task { project: "WTO", summary: "...", requirements: "...", scope: "✅ 代码\n❌ 部署", acceptance_criteria: ["..."] }
 ```
 
-### 场景 5: 子任务做不了 → 升级
-
+### 场景 4: 子任务 PASS
 ```
-1. jira { method: "", args: {
-     issueIdOrKey: "WTO-95",
-     reason: "auth center 代码需要 Leo 介入，非当前 agent 能力范围"
-   } }
-// → 评论 + escalated label + 清 assignee
+jira_submit_verdict { issueIdOrKey: "WTO-100", verdict: "PASS", summary: "code 完成, 5/5 tests pass" }
 ```
 
-### 场景 6: 主任务卡住 → 找人
-
+### 场景 5: 子任务 FAIL (外部阻塞)
 ```
-1. jira { method: "request_help", args: {
-     issueIdOrKey: "WTO-94",
-     question: "admin2 登录 401，需要确认 dev 端 v3 auth API schema 是否变更"
-   } }
-// → 评论 + wait-approval label + 清 assignee → pipeline 跳过 → 人等回复后手动移除 label → 下一轮自动接管
+jira_submit_verdict { issueIdOrKey: "WTO-100", verdict: "FAIL", summary: "blocked on X", reason: "X 系统升级, 预计明天恢复" }
 ```
 
-### 场景 7: 重新规划 → 废弃子任务
-
+### 场景 6: 重新规划 → 废弃子任务
 ```
-1. jira { method: "abandon_task", args: {
-     issueIdOrKey: "WTO-96",
-     reason: "主任务重新规划，DB 直查方向不再需要，改用代码分析路径"
-   } }
-// → 评论 + 清 assignee + 转「已完成」
+jira_abandon_task { issueIdOrKey: "WTO-100", reason: "主任务重新规划, 改用代码分析路径" }
 ```
 
-### 场景 8: plan agent 写 Phase 计划评论
-
+### 场景 7: 主任务卡住 → 找人
 ```
-1. jira { method: "comment", args: {
-     issueIdOrKey: "WTO-99",
-     body: {
-       version: 1,
-       type: "doc",
-       content: [
-         {type: "heading", attrs: {level: 2}, content: [{type: "text", text: "Phase 拆解"}]},
-         {type: "bulletList", content: [
-           {type: "listItem", content: [{type: "paragraph", content: [{type: "text", text: "P1: 修 Save 持久化 (WTO-100)"}]}]},
-           {type: "listItem", content: [{type: "paragraph", content: [{type": "text", text: "P2: 接入 v3 auth (依赖 P1)"}]}]},
-           {type: "listItem", content: [{type: "paragraph", content: [{type": "text", text: "P3: E2E 回归"}]}]}
-         ]}
-       ]
-     }
-   } }
-// → ADF 文档评论，不改状态/labels/assignee
-// body 必须是 ADF dict
+jira_request_help { issueIdOrKey: "SSSS-50", question: "需要确认 ABC 的优先级" }
+```
+
+### 场景 8: 手动转状态
+```
+jira_transition { issueIdOrKey: "WTO-100", targetStatus: "已完成" }
 ```
 
 ---
 
-## ⚠️ 避坑清单
+## 避坑清单
 
-1. **`submit_verdict.verdict` 必须是 `PASS` / `FAIL` 之一**，其他值 → fail-fast.
-
-2. **`
-
-3. **`request_help` 后 pipeline 自动跳过该 ticket**（含 `wait-approval` label）。人处理完后**手动移除 `wait-approval`**，下一轮 cron 自动接管——不需要 agent 调 method.
-
-4. **`comment` body 必须是 ADF dict** (`{version:1, type:"doc", content:[...]}`). `@mention` 需要 ADF `mention` 节点 + `accountId` (使用 `mentionMap` 参数做双射校验).
-
-5. **未设 `ATST_TOKEN` / `JIRA_CLOUD_ID` env → fail-fast** 返清晰错误，不会静默退化.
-
-6. **未设 `JIRA_PROXY` → 用默认 `http://172.29.176.1:7890`**（不报错）.
+1. **`comment.body` 必 ADF dict**: `{version:1, type:"doc", content:[{type:"paragraph", content:[{type:"text", text:"..."}]}]}`. 字符串 body 不支持.
+2. **`submit_verdict.verdict` 必为 `PASS` 或 `FAIL`**: 其他值 → fail-fast. reason 必填 (FAIL 时).
+3. **`request_help` 仅主任务**: 子任务请用 `submit_verdict({verdict:"FAIL", reason})`. (会返清晰错误并指明替代方案)
+4. **`abandon_task` 仅子任务**: 主任务请用 `submit_verdict({verdict:"FAIL"})` 或 `request_help`.
+5. **`@mention` 用 ADF `mention` 节点 + `mentionMap`**: plugin 强校验 ADF mentions 和 map 的双射 (mentionMap 省略或 `{}` → 不做校验).
+6. **`transition` 用状态名不是 button label**: 例如 SSSS 项目用 "已完成" (状态名) 不是 "Done" (button label). 不确定时 `jira_get` 看当前 status, 或 `jira_transition` 返错时会列可用 transitions. Plugin 返错格式: "Available transitions (label → destination): To Do → 待办, In Progress → 正在进行, Done → 已完成".
 
 ---
 
-## 配置
+## 配置 (env)
 
-| env | 必填 | 默认 | 说明 |
+| env | required | default | 说明 |
 |---|---|---|---|
-| `ATST_TOKEN` | ✅ | — | OAuth 2.0 3LO access token |
+| `ATST_TOKEN` | ✅ | — | OAuth 2.0 3LO access token (Bearer 头) |
 | `JIRA_CLOUD_ID` | ✅ | — | Atlassian Cloud ID (UUID) |
-| `JIRA_PROXY` | ❌ | `http://172.29.176.1:7890` | HTTP 代理 URL |
+| `JIRA_PROXY` | ❌ | `http://172.29.176.1:7890` | HTTP 代理 |
 
----
+任一 required env 未设 → 启动时 fail-fast 返清晰错误，不静默退化。
 
-## 统一路径原则
-
-**所有 Jira 操作走 `jira` native tool 的 10 个 method**，agent 不自行组合底层 REST API。
-
-| 任务 | 用什么 |
-|---|---|
-| 找 ticket | `jira {method:'search', args:{jql:'...'}}` |
-| 读 ticket | `jira {method:'get', args:{issueIdOrKey:'WTO-70'}}` |
-| 加评论 | `jira {method:'comment', args:{issueIdOrKey:'WTO-70', body:'...', adf:true}}` |
-| 建主任务 | `jira {method:'create_task', args:{...}}` |
-| 建子任务 | `jira {method:'create_subtask', args:{...}}` |
-| 完成任务 | `jira {method:'submit_verdict', args:{...}}` |
-| 升级子任务 | `jira {method:'
-| 废弃子任务 | `jira {method:'abandon_task', args:{...}}` |
-| 找人帮助 | `jira {method:'request_help', args:{...}}` |
-| 转状态 | `jira {method:'transition', args:{issueIdOrKey:'WTO-70', targetStatus:'已完成'}}` |
-
-> **CLI 替代**: `jira-tool <method> '<args-json>'`
-
----
-
-## 相关链接
-
-- **项目目录**: `~/dev/projects/jira-openclaw-plugin`
-- **Atlassian Cloud REST API v3**: https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/
-
----
-
-## 贡献指南
-
-加新 method 时:
-1. `src/handlers/<name>.ts` 写 handler
-2. `src/dispatch.ts` 加 `MVP_METHODS` + `switch` case
-3. `skills/jira/SKILL.md` 速查表 + 场景 + 避坑清单同步更新
-4. 跑: `npm run typecheck && npm run build && npm pack`
+openclaw.json 的 `plugins.entries.jira-openclaw-plugin.config` 字段 (atstToken / cloudId / proxy) 优先于 env 变量（用于本地 dev override）。

@@ -9,7 +9,7 @@
  *   - CI / pipeline scripts that need Jira data.
  *   - Local agent behavior testing (e.g. before re-enabling the plugin).
  *
- * Reuses the same handler / dispatch stack as the OpenClaw native tool —
+ * Reuses the same handler / auth stack as the OpenClaw native tools —
  * there is no separate API client. Reads env (ATST_TOKEN / JIRA_CLOUD_ID /
  * JIRA_PROXY) the same way as the OpenClaw entry point, so no new config.
  *
@@ -19,27 +19,43 @@
  * Examples:
  *   jira-tool search '{"jql":"project = WTO AND status != Done","maxResults":1}'
  *   jira-tool get '{"issueIdOrKey":"WTO-71"}'
- *   jira-tool add_label '{"issueIdOrKey":"WTO-71","label":"smoke-verify"}'
- *   jira-tool remove_label '{"issueIdOrKey":"WTO-71","label":"smoke-verify"}'
- *   jira-tool block '{"blocker":"WTO-71","blocked":"WTO-72"}'
+ *   jira-tool create_task '{"project":"WTO","summary":"...","requirements":"...","scope":"...","acceptance_criteria":["..."]}'
+ *   jira-tool create_subtask '{"project":"WTO","parent":"WTO-100","summary":"...","requirements":"...","scope":"...","acceptance_criteria":["..."],"labels":["code"]}'
+ *   jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"done"}'
+ *   jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"FAIL","summary":"blocked","reason":"waiting on X"}'
+ *   jira-tool abandon_task '{"issueIdOrKey":"WTO-101","reason":"re-planning"}'
+ *   jira-tool request_help '{"issueIdOrKey":"WTO-50","question":"need clarification"}'
+ *   jira-tool comment '{"issueIdOrKey":"WTO-100","body":{"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"..."}]}]}}'
+ *   jira-tool transition '{"issueIdOrKey":"WTO-100","targetStatus":"Done"}'
  *
- * Output: JSON pretty-printed to stdout on success.
- *         JSON error envelope to stderr + non-zero exit on failure.
+ * Output: JSON to stdout on success; non-zero exit + JSON error on stderr on failure.
  */
-import { dispatch, MVP_METHODS } from "./dispatch.js";
+import { search } from "./handlers/search.js";
+import { get } from "./handlers/get.js";
+import { comment } from "./handlers/comment.js";
+import { createTask } from "./handlers/create_task.js";
+import { createSubtask } from "./handlers/create_subtask.js";
+import { submitVerdict } from "./handlers/submit_verdict.js";
+import { abandonTask } from "./handlers/abandon_task.js";
+import { requestHelp } from "./handlers/request_help.js";
+import { transition } from "./handlers/transition.js";
+const HANDLERS = {
+    search: search,
+    get: get,
+    comment: comment,
+    create_task: createTask,
+    create_subtask: createSubtask,
+    submit_verdict: submitVerdict,
+    abandon_task: abandonTask,
+    request_help: requestHelp,
+    transition: transition,
+};
 function printUsage() {
     console.error([
         `Usage: jira-tool <method> '<args-json>'`,
         ``,
-        `MVP methods (${MVP_METHODS.length}):`,
-        ...MVP_METHODS.map((m) => `  ${m}`),
-        ``,
-        `Examples:`,
-        `  jira-tool search '{"jql":"project = WTO AND status != Done","maxResults":1}'`,
-        `  jira-tool get '{"issueIdOrKey":"WTO-71"}'`,
-        `  jira-tool add_label '{"issueIdOrKey":"WTO-71","label":"smoke-verify"}'`,
-        `  jira-tool remove_label '{"issueIdOrKey":"WTO-71","label":"smoke-verify"}'`,
-        `  jira-tool block '{"blocker":"WTO-71","blocked":"WTO-72"}'`,
+        `Methods (${Object.keys(HANDLERS).length}):`,
+        ...Object.keys(HANDLERS).map((m) => `  ${m}`),
         ``,
         `Env (same as OpenClaw plugin):`,
         `  ATST_TOKEN     OAuth 2.0 3LO access token (required)`,
@@ -57,50 +73,44 @@ async function main() {
     }
     const method = argv[0];
     const argsStr = argv.slice(1).join(" ");
+    const handler = HANDLERS[method];
+    if (!handler) {
+        console.error(JSON.stringify({
+            error: `Unknown method "${method}". ${Object.keys(HANDLERS).length} methods: ${Object.keys(HANDLERS).join(", ")}.`,
+        }, null, 2));
+        process.exit(5);
+    }
     let args = {};
     if (argsStr.length > 0) {
         try {
             const parsed = JSON.parse(argsStr);
-            if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+            if (parsed === null ||
+                typeof parsed !== "object" ||
+                Array.isArray(parsed)) {
                 console.error(`jira-tool: args must be a JSON object (got ${typeof parsed})`);
                 process.exit(2);
             }
             args = parsed;
         }
         catch (e) {
-            console.error(`jira-tool: failed to parse args JSON: ${e.message}`);
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error(`jira-tool: failed to parse args JSON: ${msg}`);
             console.error(`  received: ${argsStr.slice(0, 200)}${argsStr.length > 200 ? "..." : ""}`);
             process.exit(2);
         }
     }
     let result;
     try {
-        result = await dispatch({ method, args });
+        result = await handler(args);
     }
     catch (e) {
-        console.error(`jira-tool: dispatch failed: ${e.message}`);
-        process.exit(3);
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(JSON.stringify({ error: `jira-tool ${method} crashed: ${msg}` }, null, 2));
+        process.exit(1);
     }
-    const text = result?.content?.[0]?.text;
-    if (typeof text !== "string") {
-        console.error("jira-tool: unexpected dispatch return shape (no .content[0].text)");
-        process.exit(4);
-    }
-    // Always print to stdout (success AND error), so callers can pipe jq.
-    console.log(text);
-    // Exit non-zero if the result was an error envelope (handler returns
-    // textResult({error: "..."}) on failure, so the JSON has an "error" key).
-    try {
-        const parsed = JSON.parse(text);
-        if (parsed && typeof parsed.error === "string") {
-            process.exit(5);
-        }
-    }
-    catch {
-        // text is not JSON — not an error envelope
-    }
+    console.log(JSON.stringify(result, null, 2));
 }
 main().catch((e) => {
-    console.error(`jira-tool: fatal: ${e.message}`);
-    process.exit(99);
+    console.error(`jira-tool: unhandled error: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
 });

@@ -1,6 +1,6 @@
 {
   "name": "@cereb/jira-openclaw-plugin",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "type": "module",
   "private": true,
   "main": "dist/index.js",
@@ -32,9 +32,9 @@
     "atlassian",
     "openclaw"
   ],
-  "description": "OpenClaw native plugin for Jira Cloud REST API v3. 9 methods via single `jira` dispatcher tool (also exposed as `jira-tool` CLI).",
+  "description": "OpenClaw native plugin for Jira Cloud REST API v3. 9 named tools via defineToolPlugin.",
   "peerDependencies": {
-    "openclaw": ">=2026.3.24-beta.2"
+    "openclaw": ">=2026.5.17"
   },
   "peerDependenciesMeta": {
     "openclaw": {
