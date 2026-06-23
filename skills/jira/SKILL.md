@@ -3,7 +3,7 @@ name: jira
 description: OpenClaw jira 云原生插件. 提供两条调用路径:
   1) OpenClaw 原生 tool `jira` (agent 默认)
   2) 独立 CLI `jira-tool` (OpenCode / 任意 shell, 不依赖 OpenClaw)
-  10 个 method: 3 只读 (search/get/comment) + 6 原子任务操作 (create_task/create_subtask/submit_verdict/escalate_task/abandon_task/request_help) + 1 通用操作 (transition). 触发词: "找 WTO-XXX"、"读 ticket"、"给 ticket 加评论"、"建主任务/子任务"、"完成任务"、"升级/废弃子任务"、"找人帮助"、"转状态".
+  9 个 method: 3 只读 (search/get/comment) + 5 原子任务操作 (create_task/create_subtask/submit_verdict/abandon_task/request_help) + 1 通用操作 (transition). 0.3.4 移除 escalate_task (deprecated alias 已彻底清除). 触发词:
 metadata:
   {
     "openclaw": { "emoji": "🎫" },
@@ -12,7 +12,7 @@ metadata:
 
 # Jira Plugin Skill (0.3.1)
 
-> 插件暴露 10 个 method，其中 6 个是原子任务操作——每个 method 内部完成多步 Jira API 调用，agent 不需要自行组合底层操作。`comment` 是只读/轻写 method，用于给 ticket 加评论（Phase 计划、进度同步等），不走 6 个原子模板。`transition` 是通用状态流转 method，pipeline 内部使用，agent 一般不需手动调。
+> 插件暴露 9 个 method，其中 5 个是原子任务操作——每个 method 内部完成多步 Jira API 调用，agent 不需要自行组合底层操作。`comment` 是只读/轻写 method，用于给 ticket 加评论（Phase 计划、进度同步等），不走 5 个原子模板。`transition` 是通用状态流转 method，pipeline 内部使用，agent 一般不需手动调。
 
 ---
 
@@ -42,7 +42,7 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 
 ---
 
-## 10 method 速查 (0.3.1)
+## 9 method 速查 (0.3.4)
 
 ### 只读 (3)
 
@@ -59,7 +59,7 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 | `create_task` | plan agent | 建主任务（锁定模板 + `plan` label + assignee） | `project`, `summary`, `requirements`, **`scope`**, `acceptance_criteria` | `labels` |
 | `create_subtask` | plan agent | 建子任务（锁定模板 + label + assignee + 可选 block） | `project`, `parent`, `summary`, `requirements`, **`scope`**, `acceptance_criteria`, `labels` | `block` |
 | `submit_verdict` | 主/子 agent | 提交判定：`verdict=PASS` 评论 + 转「已完成」；`verdict=FAIL` 评论 + `escalated` label + 清 assignee | `issueIdOrKey`, `verdict` (PASS\|FAIL), `summary` (string), `evidence` (可选), `reason` (FAIL 必填) |
-| `escalate_task` | 子任务 agent | **⚠️ 已废弃** — `submit_verdict({verdict:FAIL, reason})` 的别名，转调 submit_verdict（仅子任务）。新代码用 submit_verdict | `issueIdOrKey`, `reason` |
+| `
 | `abandon_task` | plan agent | 重新规划时废弃子任务（评论 + 清 assignee + 转「已完成」） | `issueIdOrKey`, `reason` |
 | `request_help` | plan agent | 主任务卡住找人（评论 + `wait-approval` label + 清 assignee） | `issueIdOrKey`, `question` |
 
@@ -139,7 +139,7 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 ### 场景 5: 子任务做不了 → 升级
 
 ```
-1. jira { method: "escalate_task", args: {
+1. jira { method: "", args: {
      issueIdOrKey: "WTO-95",
      reason: "auth center 代码需要 Leo 介入，非当前 agent 能力范围"
    } }
@@ -171,10 +171,21 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 ```
 1. jira { method: "comment", args: {
      issueIdOrKey: "WTO-99",
-     body: "## Phase 拆解\n- P1: 修 Save 持久化 (WTO-100)\n- P2: 接入 v3 auth (依赖 P1)\n- P3: E2E 回归",
-     adf: true
+     body: {
+       version: 1,
+       type: "doc",
+       content: [
+         {type: "heading", attrs: {level: 2}, content: [{type: "text", text: "Phase 拆解"}]},
+         {type: "bulletList", content: [
+           {type: "listItem", content: [{type: "paragraph", content: [{type: "text", text: "P1: 修 Save 持久化 (WTO-100)"}]}]},
+           {type: "listItem", content: [{type: "paragraph", content: [{type": "text", text: "P2: 接入 v3 auth (依赖 P1)"}]}]},
+           {type: "listItem", content: [{type: "paragraph", content: [{type": "text", text: "P3: E2E 回归"}]}]}
+         ]}
+       ]
+     }
    } }
 // → ADF 文档评论，不改状态/labels/assignee
+// body 必须是 ADF dict (string body 在 0.3.4+ 不再支持 markdown 转换)
 ```
 
 ---
@@ -183,11 +194,11 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 
 1. **`submit_verdict.verdict` 必须是 `PASS` / `FAIL` 之一**，其他值 → fail-fast.  过去 0.2.x 有 `BLOCKED`，0.3.3+ 移除（外部阻塞也是 FAIL，reason 写清被阻塞）。
 
-2. **`escalate_task` / `abandon_task` 只能作用于子任务**，传主任务 key → fail-fast 返清晰错误.
+2. **`
 
 3. **`request_help` 后 pipeline 自动跳过该 ticket**（含 `wait-approval` label）。人处理完后**手动移除 `wait-approval`**，下一轮 cron 自动接管——不需要 agent 调 method.
 
-4. **`comment` body 是 ADF JSON 时传 `adf: true`**，否则按 wiki markup 渲染;`@mention` 需要 ADF `mention` 节点 + `accountId`.
+4. **`comment` body 必须是 ADF dict** (`{version:1, type:"doc", content:[...]}`), 不接受字符串 + `adf: true` 转换 (0.3.4 移除). `@mention` 需要 ADF `mention` 节点 + `accountId` (使用 `mentionMap` 参数做双射校验).
 
 5. **未设 `ATST_TOKEN` / `JIRA_CLOUD_ID` env → fail-fast** 返清晰错误，不会静默退化.
 
@@ -217,7 +228,7 @@ jira-tool get '{"issueIdOrKey":"WTO-71"}'
 | 建主任务 | `jira {method:'create_task', args:{...}}` |
 | 建子任务 | `jira {method:'create_subtask', args:{...}}` |
 | 完成任务 | `jira {method:'submit_verdict', args:{...}}` |
-| 升级子任务 | `jira {method:'escalate_task', args:{...}}` |
+| 升级子任务 | `jira {method:'
 | 废弃子任务 | `jira {method:'abandon_task', args:{...}}` |
 | 找人帮助 | `jira {method:'request_help', args:{...}}` |
 | 转状态 | `jira {method:'transition', args:{issueIdOrKey:'WTO-70', targetStatus:'已完成'}}` |
