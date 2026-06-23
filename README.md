@@ -1,12 +1,42 @@
 # @cereb/jira-openclaw-plugin
 
 OpenClaw native plugin for Jira Cloud REST API v3. Single dispatcher tool `jira`
-exposes 6 methods (MVP 0.1.0): `search` / `get` / `create` / `update` / `comment`
-/ `transition`.
+exposes 9 methods: `search` / `get` / `comment` / `create_task` / `create_subtask` /
+`submit_verdict` / `abandon_task` / `request_help` / `transition`.
 
 Replaces the `mcporter call atlassian.*` channel with a native agent tool. Reads
-`ATST_TOKEN` / `JIRA_CLOUD_ID` / `JIRA_PROXY` from environment (no mcporter
-dependency).
+`ATST_TOKEN` / `JIRA_CLOUD_ID` / `JIRA_PROXY` from environment.
+
+## 9 methods
+
+| method | 用途 | 必填 |
+|---|---|---|
+| `search` | JQL 搜索 (默认 30 条) | `jql` |
+| `get` | 读单 ticket 详情 | `issueIdOrKey` |
+| `comment` | 给 ticket 加评论 (ADF dict) | `issueIdOrKey`, `body` |
+| `create_task` | 建主任务（锁定模板 + `plan` label + assignee） | `project`, `summary`, `requirements`, `scope`, `acceptance_criteria` |
+| `create_subtask` | 建子任务（锁定模板 + label + assignee + 可选 block） | `project`, `parent`, `summary`, `requirements`, `scope`, `acceptance_criteria`, `labels` |
+| `submit_verdict` | 提交判定：`verdict=PASS` 评论 + 转「已完成」；`verdict=FAIL` 评论 + `escalated` label + 清 assignee | `issueIdOrKey`, `verdict` (PASS\|FAIL), `summary`, `reason` (FAIL 必填) |
+| `abandon_task` | 重新规划时废弃子任务（仅子任务） | `issueIdOrKey`, `reason` |
+| `request_help` | 主任务卡住找人（仅主任务，wait-approval label） | `issueIdOrKey`, `question` |
+| `transition` | 转 ticket 状态（按目标状态名） | `issueIdOrKey`, `targetStatus` |
+
+## 两条调用路径
+
+**OpenClaw 原生 tool `jira`** (agent 默认):
+
+```json
+jira { method: "search", args: { jql: "project = WTO AND status != Done" } }
+```
+
+**独立 CLI `jira-tool`** (OpenCode / 终端 / CI):
+
+```bash
+jira-tool search '{"jql":"project = WTO AND status != Done"}'
+jira-tool get '{"issueIdOrKey":"WTO-71"}'
+```
+
+完整方法说明 + 避坑清单：`skills/jira/SKILL.md`
 
 ## 配置 (env)
 
@@ -18,40 +48,13 @@ dependency).
 
 任一 required env 未设 → 启动时 fail-fast 返清晰错误，不静默退化。
 
-详见 `skills/jira/SKILL.md`。
-
-## 端到端 (5 步闭环)
+## 构建
 
 ```bash
 npm install
 npm run typecheck
 npm run build
-npm pack
-openclaw plugins install "npm-pack:./cereb-jira-openclaw-plugin-0.1.0.tgz"
-# 之后需 Leo 在本地 pty 重启 gateway:
-# systemctl --user restart openclaw-gateway.service
+npm test
 ```
 
-## MVP 6 method
-
-| method | REST | 必填 |
-|---|---|---|
-| `search` | `GET /rest/api/3/search` | `jql` |
-| `get` | `GET /rest/api/3/issue/{key}` | `issueIdOrKey` |
-| `create` | `POST /rest/api/3/issue` | `project`, `issuetype`, `summary` |
-| `update` | `PUT /rest/api/3/issue/{key}` | `issueIdOrKey`, `fields` |
-| `comment` | `POST /rest/api/3/issue/{key}/comment` | `issueIdOrKey`, `body` (ADF) |
-| `transition` | `GET+POST /rest/api/3/issue/{key}/transitions` | `issueIdOrKey`, `targetStatus` |
-
-## 不在 MVP (留 0.2.0)
-
-- `add_label` / `remove_label` / `block`
-- `property_get` / `property_set` / `property_del`
-- Confluence method
-- OAuth token refresh 流程 (Leo 用的是 long-lived ATST)
-
-## 安全
-
-- ❌ 不写 token 原文到任何文件 / log / commit
-- ❌ 不读 `mcporter.json` / `openclaw.json` / `installs.json`
-- ✅ 只从 `process.env.ATST_TOKEN` 读
+`openclaw` 是 peer dependency (dev install 拉 latest)，运行时 openclaw 通过 `peerDependenciesMeta.optional` 自动跳过。

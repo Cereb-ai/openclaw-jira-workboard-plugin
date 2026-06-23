@@ -1,6 +1,6 @@
 {
   "name": "@cereb/jira-openclaw-plugin",
-  "version": "0.3.2",
+  "version": "0.3.4",
   "type": "module",
   "private": true,
   "main": "dist/index.js",
@@ -32,7 +32,7 @@
     "atlassian",
     "openclaw"
   ],
-  "description": "OpenClaw native plugin for Jira Cloud REST API v3 (replaces mcporter atlassian channel)",
+  "description": "OpenClaw native plugin for Jira Cloud REST API v3. 9 methods via single `jira` dispatcher tool (also exposed as `jira-tool` CLI).",
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"
   },
