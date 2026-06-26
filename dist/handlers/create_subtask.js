@@ -1,9 +1,8 @@
 /**
- * jira.create_subtask — POST /rest/api/3/issue (orchestrator template, 0.3.0+).
+ * jira.create_subtask — POST /rest/api/3/issue (orchestrator template, 0.5.0+).
  *
- * Replaces the generic `create` for orchestrator-driven subtask creation.
- * Same ADF description template as create_task. issuetype is hard-coded to
- * "子任务" (the standard Jira Cloud subtask type name in CN locales — we
+ * Same 3 plain-text string fields as create_task. issuetype is hard-coded
+ * to "子任务" (the standard Jira Cloud subtask type name in CN locales — we
  * keep it as a string literal so callers don't drift). parent and project
  * are BOTH required — Atlassian does NOT reliably infer the project from
  * the parent key in our Jira instance, so the caller must supply it (same
@@ -13,7 +12,7 @@
  * a distinguishing tag like "subtask:impl" or "subtask:test" — defaults
  * would just paper over the orchestrator's intent. caller supplies it.
  *
- * `scope` is REQUIRED (0.3.3+) — 按 label 写 ✅ 负责 / ❌ 不负责. 渲染成 description
+ * `scope` is REQUIRED — 按 label 写 ✅ 负责 / ❌ 不负责. 渲染成 description
  * 的 `## 职责范围` 节。未传或空串 → 错误。scope 文本模板见
  * ~/.openclaw/skills/task-orchestrator/references/labels.md。
  *
@@ -58,9 +57,11 @@ export async function createSubtask(args) {
         });
     }
     const requirements = args.requirements;
-    if (typeof requirements !== "string" || requirements.length === 0) {
+    if (typeof requirements !== "string" || requirements.trim().length === 0) {
         return textResult({
-            error: "create_subtask requires `requirements` (string, non-empty).",
+            error: "create_subtask requires `requirements` (plain text string, non-empty). " +
+                "3 fields (requirements / scope / acceptance_criteria) are all plain " +
+                "text strings — NOT ADF dict, NOT arrays. See skills/jira/SKILL.md.",
         });
     }
     const scope = args.scope;
@@ -72,15 +73,11 @@ export async function createSubtask(args) {
         });
     }
     const acceptanceCriteria = args.acceptance_criteria;
-    if (!Array.isArray(acceptanceCriteria) ||
-        acceptanceCriteria.length === 0) {
+    if (typeof acceptanceCriteria !== "string" ||
+        acceptanceCriteria.trim().length === 0) {
         return textResult({
-            error: "create_subtask requires `acceptance_criteria` (string[], at least one item).",
-        });
-    }
-    if (!acceptanceCriteria.every((c) => typeof c === "string" && c.length > 0)) {
-        return textResult({
-            error: "create_subtask `acceptance_criteria` must be an array of non-empty strings.",
+            error: "create_subtask requires `acceptance_criteria` (plain text string, non-empty). " +
+                "NOT a string[]. Use \\n to separate multiple ACs. See skills/jira/SKILL.md.",
         });
     }
     // labels is required (no default) — see file header.

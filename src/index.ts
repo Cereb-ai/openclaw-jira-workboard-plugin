@@ -116,16 +116,21 @@ export default defineToolPlugin({
       name: "jira_create_task",
       label: "Jira Create Task",
       description:
-        "Create a main task. Locks template + plan label + assignee. scope (按 labels.md 写 ✅/❌ 负责) 必填, 主任务 + 子任务 description 都会渲染 ## 职责范围 节.",
+        "Create a main task. Locks template + plan label + assignee. requirements / scope / acceptance_criteria are 3 plain-text strings (NOT ADF dict, NOT arrays) — plugin wraps them into the 3-section description template. scope (按 labels.md 写 ✅/❌ 负责) 必填.",
       parameters: Type.Object({
         project: Type.String({ description: "Project key, e.g. 'WTO'" }),
         summary: Type.String({ description: "Task summary" }),
-        requirements: Type.String({ description: "Task requirements" }),
-        scope: Type.String({
-          description: "✅ 负责 / ❌ 不负责 scope text",
+        requirements: Type.String({
+          description:
+            "Plain text string (NOT ADF dict). 任务说明 段正文. Use \\n for line breaks.",
         }),
-        acceptance_criteria: Type.Array(Type.String(), {
-          description: "List of acceptance criteria strings",
+        scope: Type.String({
+          description:
+            "Plain text string. ✅ 负责 / ❌ 不负责 scope text per labels.md.",
+        }),
+        acceptance_criteria: Type.String({
+          description:
+            "Plain text string (NOT string[]). 验收标准 段正文, e.g. 'AC1: ...\\nAC2: ...\\nAC3: ...'.",
         }),
         labels: Type.Optional(
           Type.Array(Type.String(), {
@@ -142,15 +147,21 @@ export default defineToolPlugin({
       name: "jira_create_subtask",
       label: "Jira Create Subtask",
       description:
-        "Create a subtask under parent. Locks template + label + assignee + optional block. scope 必填. labels 必填 (no default).",
+        "Create a subtask under parent. Locks template + label + assignee + optional block. requirements / scope / acceptance_criteria are 3 plain-text strings (NOT ADF dict, NOT arrays). scope 必填. labels 必填 (no default).",
       parameters: Type.Object({
         project: Type.String({ description: "Project key" }),
         parent: Type.String({ description: "Parent issue key" }),
         summary: Type.String({ description: "Subtask summary" }),
-        requirements: Type.String({ description: "Subtask requirements" }),
-        scope: Type.String({ description: "✅/❌ 职责 scope text" }),
-        acceptance_criteria: Type.Array(Type.String(), {
-          description: "List of acceptance criteria strings",
+        requirements: Type.String({
+          description:
+            "Plain text string (NOT ADF dict). 任务说明 段正文.",
+        }),
+        scope: Type.String({
+          description: "Plain text string. ✅/❌ 职责 scope text.",
+        }),
+        acceptance_criteria: Type.String({
+          description:
+            "Plain text string (NOT string[]). 验收标准 段正文.",
         }),
         labels: Type.Array(Type.String(), {
           description: "Required. e.g. ['code'], ['test'], ['ops']",

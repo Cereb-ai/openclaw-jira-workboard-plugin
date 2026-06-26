@@ -20,6 +20,7 @@
 import { loadConfig } from "../auth.js";
 import { jiraGet, jiraPost, jiraPut, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
+import { validateAdfContentNodes } from "./_adf.js";
 import type { ToolResult } from "../types.js";
 
 const TARGET_STATUS = "已完成";
@@ -74,7 +75,7 @@ export async function abandonTask(
   }
 
   // Step 2: post the abandon comment.
-  const abandonComment = {
+  const abandonComment: Record<string, unknown> = {
     version: 1,
     type: "doc",
     content: [
@@ -107,6 +108,13 @@ export async function abandonTask(
       },
     ],
   } as { version: number; type: string; content: Array<{ type: string; content: Array<{ type: string; text: string }> }> };
+
+  const contentErr = validateAdfContentNodes(abandonComment);
+  if (contentErr) {
+    return textResult({
+      error: `abandon_task ADF structure error: ${contentErr}. Please report as a plugin bug.`,
+    });
+  }
 
   let commentId: string | undefined;
   let commentSelf: string | undefined;

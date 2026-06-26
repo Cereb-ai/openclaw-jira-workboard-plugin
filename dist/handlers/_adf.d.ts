@@ -13,27 +13,28 @@
  */
 import type { AdfDocument } from "../types.js";
 /**
- * Build the orchestrator description template (0.3.3+ locked):
+ * Build the orchestrator description template (0.5.0+ simplified):
  *
  *   ## 任务说明
  *   <requirements>
  *
  *   ## 职责范围
- *   <scope>            ← mandatory since 0.3.3; 按 label 写 ✅ 负责 / ❌ 不负责
+ *   <scope>            ← 按 label 写 ✅ 负责 / ❌ 不负责
  *
  *   ## 验收标准
- *   1. <criterion 1>
- *   2. <criterion 2>
- *   ...
+ *   <acceptanceCriteria>
  *
- * `requirements` is a single string (the natural-language ask).
- * `scope` is a single string (按 label 写 ✅ 负责 / ❌ 不负责) — mandatory.
- * `acceptanceCriteria` is a list of strings — one per checklist item.
+ * All three inputs are plain-text strings — caller passes them verbatim
+ * (with `\n` for line breaks). No parsing, no listItem wrapping, no ADF
+ * structure for the agent to maintain. Earlier versions accepted ADF docs
+ * or `string[]` for these fields; SSSS-388 showed that schema inconsistency
+ * caused LLM serialization drift (AC array → 1 smashed paragraph). We now
+ * lock all three to plain strings.
  *
- * Caller (create_task / create_subtask) is responsible for validating scope
- * is a non-empty string before calling. We render it directly into ADF here.
+ * Caller (create_task / create_subtask) is responsible for validating that
+ * each input is a non-empty string before calling.
  */
-export declare function buildTaskDescription(requirements: string, scope: string, acceptanceCriteria: string[]): AdfDocument;
+export declare function buildTaskDescription(requirements: string, scope: string, acceptanceCriteria: string): AdfDocument;
 /**
  * Build the completion-comment ADF for submit_verdict.
  *
@@ -70,3 +71,18 @@ export declare function buildEscalateComment(reason: string): AdfDocument;
  * is on its own line — matches the Jira UI rendering convention.
  */
 export declare function buildRequestHelpComment(question: string, mentionAccountId: string, mentionDisplayName: string): AdfDocument;
+declare function isRecord(v: unknown): v is Record<string, unknown>;
+export { isRecord };
+/**
+ * Deep-validate ADF content nodes: any node with a `content` property must
+ * have it as an Array, not an Object. Catches two common LLM-generated patterns:
+ *
+ * 1. paragraph.content = {item:{type:"text",...}} instead of [{type:"text",...}]
+ * 2. Empty objects {} in nested structures (bulletList/orderedList wrappers)
+ *
+ * Both pass Jira's client-side checks but Atlassian rejects with opaque
+ * 400 INVALID_INPUT.
+ *
+ * Returns an error message string on the first violation, or null if valid.
+ */
+export declare function validateAdfContentNodes(doc: Record<string, unknown>): string | null;

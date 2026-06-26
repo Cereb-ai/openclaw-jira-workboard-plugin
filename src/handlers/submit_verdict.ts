@@ -26,7 +26,7 @@
 import { JiraPluginError, loadConfig } from "../auth.js";
 import { jiraGet, jiraPost, jiraPut, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
-import { buildCompleteComment } from "./_adf.js";
+import { buildCompleteComment, validateAdfContentNodes } from "./_adf.js";
 import type { ToolResult } from "../types.js";
 
 type Verdict = "PASS" | "FAIL";
@@ -86,6 +86,20 @@ export async function submitVerdict(
 
   // Step 1: post the verdict comment (always).
   const commentAdf = buildCompleteComment(verdict as Verdict, summary, evidence, reason);
+
+  // Validate ADF before sending — defense-in-depth (shares the same
+  // validation used by jira_comment). buildCompleteComment should never
+  // produce invalid ADF, but this catches regressions early.
+  const contentErr = validateAdfContentNodes(commentAdf as unknown as Record<string, unknown>);
+  if (contentErr) {
+    return textResult({
+      error:
+        `submit_verdict ADF structure error: ${contentErr}. ` +
+        `This should never happen — buildCompleteComment produces code-generated ADF. ` +
+        `Please report as a plugin bug.`,
+    });
+  }
+
   let commentId: string | undefined;
   let commentSelf: string | undefined;
   try {

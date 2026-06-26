@@ -19,6 +19,7 @@
 import { loadConfig } from "../auth.js";
 import { jiraPost, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
+import { isRecord, validateAdfContentNodes } from "./_adf.js";
 import type { ToolResult } from "../types.js";
 
 export async function comment(
@@ -53,6 +54,23 @@ export async function comment(
         "comment `body` must be a valid ADF document (type='doc', version=1). " +
         "Rejecting malformed input rather than silently stringifying. " +
         "See skills/jira/SKILL.md 避坑清单 1.",
+    });
+  }
+
+  // Deep-validate ADF content structure before sending to Atlassian.
+  // Catches the common model-generated error: paragraph.content = {item:...}
+  // instead of [{type:"text", text:"..."}].  Atlassian returns opaque
+  // 400 INVALID_INPUT for this, so we catch it early with a clear hint.
+  const contentErr = validateAdfContentNodes(adf);
+  if (contentErr) {
+    return textResult({
+      error:
+        `comment ADF body structure error: ${contentErr}\n` +
+        "ADF rules: (a) paragraph.content must be an ARRAY, not an object. " +
+        "Correct: content:[{type:'text',text:'...'}]. Wrong: content:{item:{type:'text',text:'...'}}. " +
+        "(b) heading.content must be an ARRAY of text nodes. " +
+        "(c) list nodes (bulletList/orderedList).content must be an ARRAY of listItem. " +
+        "See skills/jira/SKILL.md 避坑清单 1 for the full ADF reference.",
     });
   }
 
@@ -195,10 +213,6 @@ function extractMentionIds(adf: Record<string, unknown>): string[] {
     }
   }
   return out;
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function errorMessage(err: unknown): string {

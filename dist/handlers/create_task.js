@@ -1,21 +1,19 @@
 /**
- * jira.create_task — POST /rest/api/3/issue (orchestrator template, 0.3.0+).
+ * jira.create_task — POST /rest/api/3/issue (orchestrator template, 0.5.0+).
  *
- * Replaces the generic `create` for orchestrator-driven main-task creation.
- * The ADF description template is locked in:
+ * requirements / scope / acceptance_criteria are all plain-text strings (NOT
+ * ADF dict, NOT arrays). Plugin wraps them into a 3-section description:
  *
  *   ## 任务说明
  *   <requirements>
  *
- *   ## 职责范围       ← 0.3.3+: scope 是必填
+ *   ## 职责范围
  *   <scope>             (按 label 写 ✅ 负责 / ❌ 不负责)
  *
  *   ## 验收标准
- *   1. <criterion 1>
- *   2. <criterion 2>
- *   ...
+ *   <acceptanceCriteria>
  *
- * `scope` is REQUIRED (0.3.3+) — 未传或空串 → 错误。scope 文本模板见
+ * `scope` is REQUIRED — 未传或空串 → 错误。scope 文本模板见
  * ~/.openclaw/skills/task-orchestrator/references/labels.md。
  *
  * assignees default to `defaultAssigneeAccountId` (from cfg or
@@ -53,9 +51,11 @@ export async function createTask(args) {
         });
     }
     const requirements = args.requirements;
-    if (typeof requirements !== "string" || requirements.length === 0) {
+    if (typeof requirements !== "string" || requirements.trim().length === 0) {
         return textResult({
-            error: "create_task requires `requirements` (string, non-empty).",
+            error: "create_task requires `requirements` (plain text string, non-empty). " +
+                "3 fields (requirements / scope / acceptance_criteria) are all plain " +
+                "text strings — NOT ADF dict, NOT arrays. See skills/jira/SKILL.md.",
         });
     }
     const scope = args.scope;
@@ -67,16 +67,12 @@ export async function createTask(args) {
         });
     }
     const acceptanceCriteria = args.acceptance_criteria;
-    if (!Array.isArray(acceptanceCriteria) ||
-        acceptanceCriteria.length === 0) {
+    if (typeof acceptanceCriteria !== "string" ||
+        acceptanceCriteria.trim().length === 0) {
         return textResult({
-            error: "create_task requires `acceptance_criteria` (string[], at least one item).",
-        });
-    }
-    const allStrings = acceptanceCriteria.every((c) => typeof c === "string" && c.length > 0);
-    if (!allStrings) {
-        return textResult({
-            error: "create_task `acceptance_criteria` must be an array of non-empty strings.",
+            error: "create_task requires `acceptance_criteria` (plain text string, non-empty). " +
+                "NOT a string[]. Use \\n to separate multiple ACs, e.g. 'AC1: ...\\nAC2: ...'. " +
+                "See skills/jira/SKILL.md.",
         });
     }
     // Optional: priority (default Medium), labels (default ["plan"]).

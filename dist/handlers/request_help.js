@@ -23,7 +23,7 @@
 import { loadConfig } from "../auth.js";
 import { jiraGet, jiraPost, jiraPut, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
-import { buildRequestHelpComment } from "./_adf.js";
+import { buildRequestHelpComment, validateAdfContentNodes } from "./_adf.js";
 const WAIT_APPROVAL_LABEL = "wait-approval";
 export async function requestHelp(args) {
     let cfg;
@@ -84,6 +84,12 @@ export async function requestHelp(args) {
     }
     // Step 2: post the question comment (with optional mention).
     const commentAdf = buildRequestHelpComment(question, mention, mentionDisplayName);
+    const contentErr = validateAdfContentNodes(commentAdf);
+    if (contentErr) {
+        return textResult({
+            error: `request_help ADF structure error: ${contentErr}. Please report as a plugin bug.`,
+        });
+    }
     let commentId;
     let commentSelf;
     try {

@@ -23,7 +23,7 @@
 import { loadConfig } from "../auth.js";
 import { jiraGet, jiraPost, jiraPut, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
-import { buildRequestHelpComment } from "./_adf.js";
+import { buildRequestHelpComment, validateAdfContentNodes } from "./_adf.js";
 import type { ToolResult } from "../types.js";
 
 const WAIT_APPROVAL_LABEL = "wait-approval";
@@ -98,6 +98,14 @@ export async function requestHelp(
     mention,
     mentionDisplayName,
   );
+
+  const contentErr = validateAdfContentNodes(commentAdf as unknown as Record<string, unknown>);
+  if (contentErr) {
+    return textResult({
+      error: `request_help ADF structure error: ${contentErr}. Please report as a plugin bug.`,
+    });
+  }
+
   let commentId: string | undefined;
   let commentSelf: string | undefined;
   try {

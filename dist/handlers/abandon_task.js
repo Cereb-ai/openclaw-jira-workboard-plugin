@@ -20,6 +20,7 @@
 import { loadConfig } from "../auth.js";
 import { jiraGet, jiraPost, jiraPut, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
+import { validateAdfContentNodes } from "./_adf.js";
 const TARGET_STATUS = "已完成";
 export async function abandonTask(args) {
     let cfg;
@@ -94,6 +95,12 @@ export async function abandonTask(args) {
             },
         ],
     };
+    const contentErr = validateAdfContentNodes(abandonComment);
+    if (contentErr) {
+        return textResult({
+            error: `abandon_task ADF structure error: ${contentErr}. Please report as a plugin bug.`,
+        });
+    }
     let commentId;
     let commentSelf;
     try {

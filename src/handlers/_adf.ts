@@ -14,51 +14,37 @@
 import type { AdfDocument, AdfNode } from "../types.js";
 
 /**
- * Build the orchestrator description template (0.3.3+ locked):
+ * Build the orchestrator description template (0.5.0+ simplified):
  *
  *   ## 任务说明
  *   <requirements>
  *
  *   ## 职责范围
- *   <scope>            ← mandatory since 0.3.3; 按 label 写 ✅ 负责 / ❌ 不负责
+ *   <scope>            ← 按 label 写 ✅ 负责 / ❌ 不负责
  *
  *   ## 验收标准
- *   1. <criterion 1>
- *   2. <criterion 2>
- *   ...
+ *   <acceptanceCriteria>
  *
- * `requirements` is a single string (the natural-language ask).
- * `scope` is a single string (按 label 写 ✅ 负责 / ❌ 不负责) — mandatory.
- * `acceptanceCriteria` is a list of strings — one per checklist item.
+ * All three inputs are plain-text strings — caller passes them verbatim
+ * (with `\n` for line breaks). No parsing, no listItem wrapping, no ADF
+ * structure for the agent to maintain. Earlier versions accepted ADF docs
+ * or `string[]` for these fields; SSSS-388 showed that schema inconsistency
+ * caused LLM serialization drift (AC array → 1 smashed paragraph). We now
+ * lock all three to plain strings.
  *
- * Caller (create_task / create_subtask) is responsible for validating scope
- * is a non-empty string before calling. We render it directly into ADF here.
+ * Caller (create_task / create_subtask) is responsible for validating that
+ * each input is a non-empty string before calling.
  */
 export function buildTaskDescription(
   requirements: string,
   scope: string,
-  acceptanceCriteria: string[],
+  acceptanceCriteria: string,
 ): AdfDocument {
-  const items = acceptanceCriteria.map((c) => ({
-    type: "listItem",
-    content: [
-      {
-        type: "paragraph",
-        content: [{ type: "text", text: c }],
-      },
-    ],
-  }));
+  const text = `## 任务说明\n${requirements}\n\n## 职责范围\n${scope}\n\n## 验收标准\n${acceptanceCriteria}`;
   return {
     version: 1,
     type: "doc",
-    content: [
-      heading2("任务说明"),
-      { type: "paragraph", content: [{ type: "text", text: requirements }] },
-      heading2("职责范围"),
-      { type: "paragraph", content: [{ type: "text", text: scope }] },
-      heading2("验收标准"),
-      { type: "orderedList", content: items },
-    ],
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
   };
 }
 
@@ -164,4 +150,61 @@ function heading2(text: string): AdfNode {
     attrs: { level: 2 },
     content: [{ type: "text", text }],
   };
+}
+
+// ---- ADF validation (shared across all handlers that send ADF to Atlassian) ----
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+export { isRecord };
+
+/**
+ * Deep-validate ADF content nodes: any node with a `content` property must
+ * have it as an Array, not an Object. Catches two common LLM-generated patterns:
+ *
+ * 1. paragraph.content = {item:{type:"text",...}} instead of [{type:"text",...}]
+ * 2. Empty objects {} in nested structures (bulletList/orderedList wrappers)
+ *
+ * Both pass Jira's client-side checks but Atlassian rejects with opaque
+ * 400 INVALID_INPUT.
+ *
+ * Returns an error message string on the first violation, or null if valid.
+ */
+export function validateAdfContentNodes(doc: Record<string, unknown>): string | null {
+  const stack: unknown[] = [doc];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!isRecord(node)) continue;
+
+    // Leaf nodes (no content children) — skip.
+    const leafTypes = new Set(["text", "mention", "hardBreak", "rule", "emoji", "inlineCard"]);
+    if (typeof node.type === "string" && leafTypes.has(node.type)) continue;
+
+    // Node has neither a recognized type nor content → garbage (e.g. {})
+    if (!("content" in node)) {
+      const nodeType = typeof node.type === "string" ? node.type : "undefined";
+      return `node type="${nodeType}": has no content children. ` +
+        `Non-leaf ADF nodes must have a valid type + content:[...] array. ` +
+        `Empty nodes ({}) are not valid ADF — likely an LLM serialization error.`;
+    }
+
+    // Check: if this node has a `content` property, it must be an Array.
+    if ("content" in node) {
+      const c = node.content;
+      if (!Array.isArray(c)) {
+        const nodeType = typeof node.type === "string" ? node.type : "unknown";
+        const contentType = c === null ? "null" : typeof c;
+        let hint = "";
+        if (isRecord(c) && "item" in c) {
+          hint = ` (looks like content:{item:{...}} instead of content:[{...}]; remove the "item" wrapper)`;
+        }
+        return `node type="${nodeType}": content is ${contentType}, must be an Array${hint}`;
+      }
+      // Push children for recursive check.
+      for (const child of c as unknown[]) stack.push(child);
+    }
+  }
+  return null;
 }
