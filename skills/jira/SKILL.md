@@ -53,8 +53,8 @@ jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"
 
 | tool | 用途 | 必填 | 常用选填 |
 |---|---|---|---|
-| `jira_create_task` | 建主任务 (锁定模板 + `plan` label + assignee) | `project`, `summary`, `requirements`, `scope`, `acceptance_criteria` | `labels` |
-| `jira_create_subtask` | 建子任务 (锁定模板 + label + assignee + 可选 block) | `project`, `parent`, `summary`, `requirements`, `scope`, `acceptance_criteria`, `labels` | `block` |
+| `jira_create_task` | 建主任务 (labels 不传 → 默认 `['plan']`；传了 → 原样使用) | `project`, `summary`, `requirements`, `scope`, `acceptance_criteria` | `labels` |
+| `jira_create_subtask` | 建子任务 (labels 必填，无默认; + assignee + 可选 block) | `project`, `parent`, `summary`, `requirements`, `scope`, `acceptance_criteria`, `labels` | `block` |
 | `jira_submit_verdict` | 提交判定: PASS 转「已完成」; FAIL 加 `escalated` label + 清 assignee | `issueIdOrKey`, `verdict` (PASS\|FAIL), `summary` | `reason` (FAIL 必填), `evidence` |
 | `jira_abandon_task` | 重新规划时废弃子任务 (评论 + 清 assignee + 转「已完成」) | `issueIdOrKey`, `reason` | — |
 | `jira_request_help` | 主任务卡住找人 (评论 + `wait-approval` label + 清 assignee) | `issueIdOrKey`, `question` | — |
