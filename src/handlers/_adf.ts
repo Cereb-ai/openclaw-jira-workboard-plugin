@@ -208,3 +208,228 @@ export function validateAdfContentNodes(doc: Record<string, unknown>): string | 
   }
   return null;
 }
+
+// ---- ADF → plain-text extraction (used by list_comments / get_comment, 0.4.0+) ----
+
+/**
+ * Result of converting an ADF doc to plain text + a mention list.
+ *
+ *   text:     human-readable string (block-level nodes separated by "\n\n";
+ *             inline nodes concatenated). For LLM consumption.
+ *   mentions: deduped list of `{accountId, displayName}` for every ADF
+ *             mention node. Preserves first-seen order.
+ *
+ * We deliberately do NOT preserve marks (bold/code/link) — context-savings
+ * is the entire point of these tools. The raw ADF body is still available
+ * via jira_comment (or by re-running jira_get and asking for `comment`).
+ */
+export interface AdfToTextResult {
+  text: string;
+  mentions: Array<{ accountId: string; displayName: string }>;
+}
+
+/**
+ * Convert an ADF document to plain text and a mention list.
+ *
+ * Accepts a parsed ADF dict, an ADF body wrapped inside a Jira response
+ * (e.g. `comment.body`), or `null`/missing — in which case returns
+ * `{ text: "", mentions: [] }`. Anything that fails the safety check
+ * (`type !== "doc"` or `version !== 1`) is treated as empty to avoid
+ * throwing inside a list-comments path; callers can still re-fetch
+ * raw ADF via a separate tool.
+ *
+ * Block separators: a top-level `paragraph` / `heading` ends with `"\n\n"`,
+ * a `bulletList` / `orderedList` / `blockquote` ends with `"\n\n"`. A
+ * `codeBlock` is rendered as a fenced block:
+ *
+ *   ```<language>
+ *   <code>
+ *   ```
+ *
+ * The intent is to be useful for an LLM, not to be a lossless round-trip
+ * — there's no need to recover marks / lists / links. (We render `- ` for
+ * each listItem so the structure is at least visible.)
+ */
+export function adfToPlainText(input: unknown): AdfToTextResult {
+  const mentions: Array<{ accountId: string; displayName: string }> = [];
+  const seenMentionIds = new Set<string>();
+
+  // Pull out the body if the caller passed a Jira-shaped envelope.
+  let doc: unknown = input;
+  if (isRecord(input) && isRecord(input.body)) {
+    doc = input.body;
+  }
+
+  if (!isRecord(doc) || doc.type !== "doc" || doc.version !== 1) {
+    return { text: "", mentions };
+  }
+
+  const blocks: string[] = [];
+  const content = doc.content;
+  if (!Array.isArray(content)) {
+    return { text: "", mentions };
+  }
+
+  for (const node of content) {
+    const rendered = renderBlock(node, mentions, seenMentionIds);
+    if (rendered.length > 0) {
+      blocks.push(rendered);
+    }
+  }
+
+  // Join blocks with blank line. Trim trailing whitespace for tidiness.
+  const text = blocks.join("\n\n").replace(/\s+$/, "");
+  return { text, mentions };
+}
+
+function renderBlock(
+  node: unknown,
+  mentions: Array<{ accountId: string; displayName: string }>,
+  seenMentionIds: Set<string>,
+): string {
+  if (!isRecord(node)) return "";
+  switch (node.type) {
+    case "paragraph":
+      return renderInlines(node.content, mentions, seenMentionIds);
+    case "heading": {
+      const level = isRecord(node.attrs) && typeof node.attrs.level === "number"
+        ? node.attrs.level
+        : 2;
+      const hashes = "#".repeat(Math.min(Math.max(level, 1), 6));
+      const inner = renderInlines(node.content, mentions, seenMentionIds);
+      return `${hashes} ${inner}`;
+    }
+    case "codeBlock": {
+      const lang = isRecord(node.attrs) && typeof node.attrs.language === "string"
+        ? node.attrs.language
+        : "";
+      const inner = renderInlines(node.content, mentions, seenMentionIds);
+      return `\`\`\`${lang}\n${inner}\n\`\`\``;
+    }
+    case "blockquote":
+      return renderChildrenAsBlocks(node.content, mentions, seenMentionIds)
+        .split("\n")
+        .map((l) => (l.length > 0 ? `> ${l}` : ">"))
+        .join("\n");
+    case "bulletList":
+    case "orderedList":
+      return renderList(node.content, node.type === "orderedList", mentions, seenMentionIds);
+    case "panel": {
+      const inner = renderChildrenAsBlocks(node.content, mentions, seenMentionIds);
+      return inner.length > 0 ? inner : "";
+    }
+    case "rule":
+      return "---";
+    default:
+      // Unknown block — try to render its inline content as a paragraph.
+      return renderInlines(node.content, mentions, seenMentionIds);
+  }
+}
+
+function renderList(
+  content: unknown,
+  ordered: boolean,
+  mentions: Array<{ accountId: string; displayName: string }>,
+  seenMentionIds: Set<string>,
+): string {
+  if (!Array.isArray(content)) return "";
+  const lines: string[] = [];
+  let i = 1;
+  for (const item of content) {
+    if (!isRecord(item) || item.type !== "listItem") continue;
+    const marker = ordered ? `${i}.` : "-";
+    const inner = renderChildrenAsBlocks(item.content, mentions, seenMentionIds);
+    // Indent multi-line listItem bodies.
+    const indented = inner
+      .split("\n")
+      .map((l) => (l.length > 0 ? `  ${l}` : ""))
+      .join("\n");
+    lines.push(`${marker} ${indented.replace(/^  /, "")}`);
+    i += 1;
+  }
+  return lines.join("\n");
+}
+
+function renderChildrenAsBlocks(
+  content: unknown,
+  mentions: Array<{ accountId: string; displayName: string }>,
+  seenMentionIds: Set<string>,
+): string {
+  if (!Array.isArray(content)) return "";
+  const out: string[] = [];
+  for (const child of content) {
+    const rendered = renderBlock(child, mentions, seenMentionIds);
+    if (rendered.length > 0) out.push(rendered);
+  }
+  return out.join("\n\n");
+}
+
+function renderInlines(
+  content: unknown,
+  mentions: Array<{ accountId: string; displayName: string }>,
+  seenMentionIds: Set<string>,
+): string {
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const node of content) {
+    const piece = renderInline(node, mentions, seenMentionIds);
+    if (piece.length > 0) parts.push(piece);
+  }
+  return parts.join("");
+}
+
+function renderInline(
+  node: unknown,
+  mentions: Array<{ accountId: string; displayName: string }>,
+  seenMentionIds: Set<string>,
+): string {
+  if (!isRecord(node)) return "";
+  switch (node.type) {
+    case "text":
+      return typeof node.text === "string" ? node.text : "";
+    case "hardBreak":
+      return "\n";
+    case "mention": {
+      const attrs = node.attrs;
+      if (!isRecord(attrs)) return "@unknown";
+      const id = typeof attrs.id === "string" ? attrs.id : "";
+      // Atlassian stores display name in `text` (e.g. "@Alice"). Strip the
+      // leading @ for the mention list — we add it back when re-rendering.
+      const rawText = typeof attrs.text === "string" ? attrs.text : id;
+      const displayName = rawText.replace(/^@/, "");
+      if (id.length > 0 && !seenMentionIds.has(id)) {
+        seenMentionIds.add(id);
+        mentions.push({ accountId: id, displayName });
+      }
+      return `@${displayName}`;
+    }
+    case "emoji": {
+      const attrs = node.attrs;
+      if (isRecord(attrs) && typeof attrs.text === "string") return attrs.text;
+      if (isRecord(attrs) && typeof attrs.shortName === "string") {
+        return attrs.shortName;
+      }
+      return "";
+    }
+    case "inlineCard":
+    case "link": {
+      // Render as plain text fallback — link URL alone is rarely useful in
+      // an LLM context. If we have a child text node, use that; otherwise
+      // we drop the marker (better than "[link](url)" clutter).
+      if (Array.isArray(node.content)) {
+        return node.content
+          .map((c) => renderInline(c, mentions, seenMentionIds))
+          .join("");
+      }
+      return "";
+    }
+    default:
+      // Unknown inline — try recurse.
+      if (Array.isArray(node.content)) {
+        return node.content
+          .map((c) => renderInline(c, mentions, seenMentionIds))
+          .join("");
+      }
+      return "";
+  }
+}

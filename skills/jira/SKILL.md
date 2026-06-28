@@ -1,6 +1,6 @@
 ---
 name: jira
-description: OpenClaw jira 云原生插件. 9 个 named tools (jira_search / jira_get / jira_comment / jira_transition / jira_create_task / jira_create_subtask / jira_submit_verdict / jira_abandon_task / jira_request_help). 触发词:
+description: OpenClaw jira 云原生插件. 11 个 named tools (jira_search / jira_get / jira_list_comments / jira_get_comment / jira_comment / jira_transition / jira_create_task / jira_create_subtask / jira_submit_verdict / jira_abandon_task / jira_request_help). 触发词: 查评论 / 看评论 / 读评论 / 评论列表 / 列出评论 / list comments / get comment
 metadata:
   {
     "openclaw": { "emoji": "🎫" },
@@ -9,7 +9,7 @@ metadata:
 
 # Jira Plugin Skill
 
-> 插件暴露 9 个 named tools，每个 tool 对应一个 Jira Cloud REST v3 method。agent 直接调 named tool 即可，不需要 dispatcher 包装。comment / create_task / create_subtask / submit_verdict / abandon_task / request_help 内部完成多步 Jira API 调用，agent 不需要自行组合。
+> 插件暴露 11 个 named tools，每个 tool 对应一个 Jira Cloud REST v3 method。agent 直接调 named tool 即可，不需要 dispatcher 包装。comment / create_task / create_subtask / submit_verdict / abandon_task / request_help 内部完成多步 Jira API 调用，agent 不需要自行组合。
 
 ---
 
@@ -38,14 +38,16 @@ jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"
 
 ---
 
-## 9 tool 速查
+## 11 tool 速查
 
-### 通用 (4)
+### 通用 (6)
 
 | tool | 用途 | 必填 | 常用选填 |
 |---|---|---|---|
 | `jira_search` | JQL 搜索 (默认 30 条) | `jql` | `maxResults`, `fields` |
-| `jira_get` | 读单 ticket 详情 | `issueIdOrKey` | `fields` |
+| `jira_get` | 读单 ticket 详情 (默认走白名单, 排除 comment/worklog) | `issueIdOrKey` | `fields` |
+| `jira_list_comments` | 拉 ticket 全部评论 (ADF → 纯文本 + mentions) | `issueIdOrKey` | `startAt`, `maxResults` (≤100), `orderBy`, `since` (ISO date, 客户端 filter), `authorAccountId` (客户端 filter) |
+| `jira_get_comment` | 读单条评论 (ADF → 纯文本 + mentions) | `issueIdOrKey`, `commentId` | — |
 | `jira_comment` | 给 ticket 加评论 (ADF dict body) | `issueIdOrKey`, `body` | `mentionMap` |
 | `jira_transition` | 转 ticket 状态 (按目标状态名) | `issueIdOrKey`, `targetStatus` | — |
 
@@ -119,6 +121,84 @@ jira_request_help { issueIdOrKey: "SSSS-50", question: "需要确认 ABC 的优�
 ### 场景 8: 手动转状态
 ```
 jira_transition { issueIdOrKey: "WTO-100", targetStatus: "已完成" }
+```
+
+---
+
+## 上下文优化 (省 context)
+
+3 个工具专门为「减少 LLM context 占用」设计. `jira_get` 默认会向 Atlassian 拉一整个 issue payload — 其中 `comment` 和 `worklog` 子资源动辄 5-50 KB per ticket, 但 agent 多数场景下根本用不到. 这 3 个工具让 agent **按需拉取**, 避免一次拉全.
+
+### `jira_get` 默认白名单 (server-side fields whitelist)
+
+```json
+jira_get { issueIdOrKey: "SSSS-401" }
+```
+
+默认不带任何参数 → plugin **服务端** 走 `fields` query param 限定白名单:
+
+```
+summary, status, issuetype, priority, labels,
+assignee, reporter, created, updated, parent, description
+```
+
+白名单**排除** `comment` / `worklog` / `attachment` 等重资源. 实测对比 `*navigable` 默认集, 一个 long-lived ticket 可以从 30+ KB 砍到 1-3 KB.
+
+**为什么走服务端 query 而不是 client-side filter**: Atlassian wire payload 在我们 formatter 跑之前就开始烧 token 了, 客户端裁剪救不了 wire cost. 唯一靠谱的省点是 `fields` query param.
+
+**怎么扩**:
+```json
+jira_get { issueIdOrKey: "SSSS-401", fields: ["*all"] }                  // 全量 (相当于 *navigable)
+jira_get { issueIdOrKey: "SSSS-401", fields: ["customfield_10019"] }     // 单 custom field
+jira_get { issueIdOrKey: "SSSS-401", fields: ["summary","status","customfield_10019"] }  // 混搭
+```
+
+返回结构不变: `issue.summary` / `issue.status` / `issue.description` / `issue.fields` (curated fields dict, **不含** comment/worklog).
+
+### `jira_list_comments`
+
+```json
+jira_list_comments { issueIdOrKey: "SSSS-401", maxResults: 20, orderBy: "-created" }
+jira_list_comments { issueIdOrKey: "SSSS-401", since: "2026-06-15T00:00:00.000+0800", authorAccountId: "712020:42e79d90-..." }
+```
+
+- 走 `GET /issue/{key}/comment`, 默认 `maxResults=50` 上限 100, `orderBy="-created"` (最新在前)
+- **comment body 自动从 ADF 转纯文本** (heading 渲染成 `## xxx`, bulletList 渲染成 `- xxx`, mention 渲染成 `@displayName`)
+- 每个 comment 带 `mentions: [{accountId, displayName}]` 列表 — 回答 "谁被 @ 了" 这个高频问题不需要回扫 ADF
+- `startAt` 用于翻页 (Atlassian 默认 50 一页)
+- `since` (可选, ISO date string) — **客户端 filter**: 保留 `created >= since` 的评论. 留空 / 省略 → 不过滤, 不 throw. 非法 ISO string → 软错误. 例: `"2026-06-15"` 或 `"2026-06-15T10:00:00.000+0800"`.
+- `authorAccountId` (可选, string) — **客户端 filter**: 保留 `author.accountId` 匹配的评论. 留空 / 省略 → 不过滤, 不 throw. 例: `"712020:42e79d90-a6eb-45e7-ac69-f2872f3b89b1"`.
+- `rawCount` 字段返回过滤前数量, `count` 返回过滤后数量, 方便 agent 评估过滤效果.
+
+### `jira_get_comment`
+
+```json
+jira_get_comment { issueIdOrKey: "SSSS-401", commentId: "10001" }
+```
+
+- 走 `GET /issue/{key}/comment/{id}`, 两个参数都必填 (Atlassian 的 comment id 只在 issue 内唯一)
+- 输出 shape 跟 `jira_list_comments` 单条一致: `{id, author, created, body, mentions}`
+- `summary` 里带 `bodyChars` 和 `mentionCount` 方便 agent 判断要不要再下钻
+
+### 三者配合的典型 workflow
+
+```text
+1. jira_search { jql: "project = SSSS AND status = 'In Progress'" }
+   → 拿到 N 个 ticket key (search 已经走默认 fields, 不付 comment 成本)
+
+2. 对每个 key:
+   jira_get { issueIdOrKey: "SSSS-N" }
+   → 默认白名单, 不拉 comment / worklog (vs *navigable 省 ~80%)
+
+3. 需要看 description 正文:
+   jira_get 返回的 issue.description 已经够用 (默认白名单含 description)
+
+4. 需要看评论历史时 (按需):
+   jira_list_comments { issueIdOrKey: "SSSS-N", maxResults: 10 }
+   → 纯文本 + mentions, 不付 ADF 成本
+
+5. 某条评论很关键, 想看完整原 ADF:
+   → 现阶段没有 raw ADF 工具. 需要的话用 Atlassian UI 或后续在 plugin 加 flag.
 ```
 
 ---
@@ -559,6 +639,8 @@ assert not problems, problems  # OK 才发
 5. **`abandon_task` 仅子任务**: 主任务请用 `submit_verdict({verdict:"FAIL"})` 或 `request_help`.
 6. **`@mention` 用 ADF `mention` 节点 + `mentionMap`**: plugin 强校验 ADF mentions 和 map 的双射 (mentionMap 省略或 `{}` → 不做校验).
 7. **`transition` 用状态名不是 button label**: 例如 SSSS 项目用 "已完成" (状态名) 不是 "Done" (button label). 不确定时 `jira_get` 看当前 status, 或 `jira_transition` 返错时会列可用 transitions. Plugin 返错格式: "Available transitions (label → destination): To Do → 待办, In Progress → 正在进行, Done → 已完成".
+8. **`jira_get` 默认走白名单, 不拉 `comment` / `worklog`** (~80% context 节省 vs `*navigable`). 需要全量 → `fields: ['*all']`; 需要单个 custom field → `fields: ['customfield_10019']`. 评论另走 `jira_list_comments` (ADF → 纯文本, deduped mentions). 3 个上下文优化工具详见上面"上下文优化" section.
+9. **`jira_list_comments` / `jira_get_comment` 输出永远是纯文本, 不是 ADF**: plugin 自动 ADF → plain text. 所以**不要**把 `jira_list_comments` 的输出直接喂回 `jira_comment` 的 `body` (会被 Atlassian 当成 string body 拒掉). 要 reply 哪条评论, 手动写 ADF.
 
 ---
 
