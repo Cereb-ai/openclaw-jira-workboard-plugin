@@ -10,22 +10,105 @@
  *   ## 验收标准
  *   <acceptanceCriteria>
  *
- * All three inputs are plain-text strings — caller passes them verbatim
- * (with `\n` for line breaks). No parsing, no listItem wrapping, no ADF
- * structure for the agent to maintain. Earlier versions accepted ADF docs
+ * All three inputs are plain-text strings — caller passes them verbatim.
+ * No ADF for the caller to maintain. Earlier versions accepted ADF docs
  * or `string[]` for these fields; SSSS-388 showed that schema inconsistency
  * caused LLM serialization drift (AC array → 1 smashed paragraph). We now
  * lock all three to plain strings.
+ *
+ * Newline handling inside each field (0.5.1+):
+ *   - `\n\n` (blank line) inside `requirements` / `scope` → split into
+ *     separate paragraph nodes (so Jira renders consistent paragraph
+ *     breaks regardless of viewer).
+ *   - `\n` (single newline) inside `requirements` / `scope` → render as
+ *     ADF `hardBreak` so it's an explicit line break (instead of relying
+ *     on `\n` inside a text node, which some Jira renderers show as
+ *     literal `\n`).
+ *   - `acceptanceCriteria` is split on every `\n` and emitted as an
+ *     orderedList (one listItem per AC line). Single line with no `\n`
+ *     still becomes a 1-item orderedList.
  *
  * Caller (create_task / create_subtask) is responsible for validating that
  * each input is a non-empty string before calling.
  */
 export function buildTaskDescription(requirements, scope, acceptanceCriteria) {
-    const text = `## 任务说明\n${requirements}\n\n## 职责范围\n${scope}\n\n## 验收标准\n${acceptanceCriteria}`;
+    const content = [];
+    // ## 任务说明
+    content.push(heading2("任务说明"));
+    content.push(...textToParagraphs(requirements));
+    // ## 职责范围
+    content.push(heading2("职责范围"));
+    content.push(...textToParagraphs(scope));
+    // ## 验收标准
+    content.push(heading2("验收标准"));
+    content.push(textToOrderedList(acceptanceCriteria));
+    return { version: 1, type: "doc", content };
+}
+/**
+ * Convert a plain-text section to one or more ADF paragraph nodes.
+ * - Blank lines (`\n\n+`) split into separate paragraphs.
+ * - Single newlines become ADF `hardBreak` inline nodes so every Jira
+ *   viewer renders them as line breaks (instead of literal `\n`).
+ * - Empty / whitespace-only input produces one empty paragraph (matches
+ *   the prior behavior of always emitting a paragraph after each heading).
+ */
+function textToParagraphs(text) {
+    const normalized = text.replace(/\r\n/g, "\n").trim();
+    if (normalized.length === 0) {
+        return [{ type: "paragraph", content: [{ type: "text", text: "" }] }];
+    }
+    return normalized
+        .split(/\n\n+/)
+        .map((chunk) => chunk.trim())
+        .filter((chunk) => chunk.length > 0)
+        .map((chunk) => ({ type: "paragraph", content: lineToInlines(chunk) }));
+}
+/**
+ * Convert a single "paragraph chunk" into inline ADF nodes. Single `\n`
+ * become `hardBreak`; everything else becomes a `text` node.
+ */
+function lineToInlines(chunk) {
+    const lines = chunk.split("\n");
+    const nodes = [];
+    for (let i = 0; i < lines.length; i++) {
+        if (i > 0)
+            nodes.push({ type: "hardBreak" });
+        nodes.push({ type: "text", text: lines[i] });
+    }
+    return nodes;
+}
+/**
+ * Convert acceptance criteria into an orderedList. Each non-empty line
+ * becomes one listItem. Empty / whitespace-only input produces a 1-item
+ * list with an empty paragraph (so the heading isn't orphaned).
+ */
+function textToOrderedList(text) {
+    const normalized = text.replace(/\r\n/g, "\n").trim();
+    if (normalized.length === 0) {
+        return {
+            type: "orderedList",
+            content: [
+                {
+                    type: "listItem",
+                    content: [
+                        { type: "paragraph", content: [{ type: "text", text: "" }] },
+                    ],
+                },
+            ],
+        };
+    }
+    const items = normalized
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
     return {
-        version: 1,
-        type: "doc",
-        content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+        type: "orderedList",
+        content: items.map((item) => ({
+            type: "listItem",
+            content: [
+                { type: "paragraph", content: [{ type: "text", text: item }] },
+            ],
+        })),
     };
 }
 /**

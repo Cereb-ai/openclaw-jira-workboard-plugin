@@ -24,12 +24,23 @@ import type { AdfDocument } from "../types.js";
  *   ## 验收标准
  *   <acceptanceCriteria>
  *
- * All three inputs are plain-text strings — caller passes them verbatim
- * (with `\n` for line breaks). No parsing, no listItem wrapping, no ADF
- * structure for the agent to maintain. Earlier versions accepted ADF docs
+ * All three inputs are plain-text strings — caller passes them verbatim.
+ * No ADF for the caller to maintain. Earlier versions accepted ADF docs
  * or `string[]` for these fields; SSSS-388 showed that schema inconsistency
  * caused LLM serialization drift (AC array → 1 smashed paragraph). We now
  * lock all three to plain strings.
+ *
+ * Newline handling inside each field (0.5.1+):
+ *   - `\n\n` (blank line) inside `requirements` / `scope` → split into
+ *     separate paragraph nodes (so Jira renders consistent paragraph
+ *     breaks regardless of viewer).
+ *   - `\n` (single newline) inside `requirements` / `scope` → render as
+ *     ADF `hardBreak` so it's an explicit line break (instead of relying
+ *     on `\n` inside a text node, which some Jira renderers show as
+ *     literal `\n`).
+ *   - `acceptanceCriteria` is split on every `\n` and emitted as an
+ *     orderedList (one listItem per AC line). Single line with no `\n`
+ *     still becomes a 1-item orderedList.
  *
  * Caller (create_task / create_subtask) is responsible for validating that
  * each input is a non-empty string before calling.
