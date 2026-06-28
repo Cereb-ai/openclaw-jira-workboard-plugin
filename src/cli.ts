@@ -2,7 +2,7 @@
 /**
  * jira-tool — CLI wrapper for the @cereb/jira-openclaw-plugin.
  *
- * Allows the 9 plugin methods to be invoked from any shell / terminal,
+ * Allows the 11 plugin methods to be invoked from any shell / terminal,
  * independently of OpenClaw / OpenCode / Wecom DM. Useful for:
  *
  *   - Debugging from a PC terminal without the full OpenClaw round-trip.
@@ -19,6 +19,9 @@
  * Examples:
  *   jira-tool search '{"jql":"project = WTO AND status != Done","maxResults":1}'
  *   jira-tool get '{"issueIdOrKey":"WTO-71"}'
+ *   jira-tool get '{"issueIdOrKey":"WTO-71","concise":true}'
+ *   jira-tool list_comments '{"issueIdOrKey":"WTO-71","maxResults":10}'
+ *   jira-tool get_comment '{"issueIdOrKey":"WTO-71","commentId":"10001"}'
  *   jira-tool create_task '{"project":"WTO","summary":"...","requirements":"...","scope":"...","acceptance_criteria":["..."]}'
  *   jira-tool create_subtask '{"project":"WTO","parent":"WTO-100","summary":"...","requirements":"...","scope":"...","acceptance_criteria":["..."],"labels":["code"]}'
  *   jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"done"}'
@@ -33,6 +36,8 @@
 import { search } from "./handlers/search.js";
 import { get } from "./handlers/get.js";
 import { comment } from "./handlers/comment.js";
+import { listComments } from "./handlers/list_comments.js";
+import { getComment } from "./handlers/get_comment.js";
 import { createTask } from "./handlers/create_task.js";
 import { createSubtask } from "./handlers/create_subtask.js";
 import { submitVerdict } from "./handlers/submit_verdict.js";
@@ -44,6 +49,8 @@ import type { ToolResult } from "./types.js";
 const HANDLERS: Record<string, (args: Record<string, unknown>) => Promise<ToolResult>> = {
   search: search,
   get: get,
+  list_comments: listComments,
+  get_comment: getComment,
   comment: comment,
   create_task: createTask,
   create_subtask: createSubtask,

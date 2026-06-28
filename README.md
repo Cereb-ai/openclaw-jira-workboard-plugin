@@ -2,12 +2,14 @@
 
 OpenClaw native plugin for Jira Cloud REST API v3. 9 named tools via `defineToolPlugin` (OpenClaw 0.5.17+). Replaces the `mcporter call atlassian.*` channel.
 
-## 9 tools
+## 11 tools
 
 | tool | 用途 | 必填 |
 |---|---|---|
 | `jira_search` | JQL 搜索 (默认 30 条) | `jql` |
-| `jira_get` | 读单 ticket 详情 | `issueIdOrKey` |
+| `jira_get` | 读单 ticket 详情 (默认走白名单, 排除 comment/worklog) | `issueIdOrKey` |
+| `jira_list_comments` | 拉 ticket 全部评论 (ADF → 纯文本 + mentions) | `issueIdOrKey` |
+| `jira_get_comment` | 读单条评论 (ADF → 纯文本 + mentions) | `issueIdOrKey`, `commentId` |
 | `jira_comment` | 给 ticket 加评论 (ADF dict) | `issueIdOrKey`, `body` |
 | `jira_transition` | 转 ticket 状态 (按目标状态名) | `issueIdOrKey`, `targetStatus` |
 | `jira_create_task` | 建主任务 (锁定模板 + `plan` label + assignee) | `project`, `summary`, `requirements`, `scope`, `acceptance_criteria` |
