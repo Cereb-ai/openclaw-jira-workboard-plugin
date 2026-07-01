@@ -1,6 +1,6 @@
 ---
 name: jira
-description: OpenClaw jira 云原生插件. 11 个 named tools (jira_search / jira_get / jira_list_comments / jira_get_comment / jira_comment / jira_transition / jira_create_task / jira_create_subtask / jira_submit_verdict / jira_abandon_task / jira_request_help). 触发词: 查评论 / 看评论 / 读评论 / 评论列表 / 列出评论 / list comments / get comment
+description: OpenClaw jira 云原生插件. 14 个 named tools (jira_search / jira_get / jira_list_comments / jira_get_comment / jira_comment / jira_list_attachments / jira_get_attachment / **jira_upload_attachment** / jira_transition / jira_create_task / jira_create_subtask / jira_submit_verdict / jira_abandon_task / jira_request_help). 触发词: 查评论 / 看评论 / 读评论 / 评论列表 / 列出评论 / list comments / get comment / 附件 / attachment / 上传附件 / upload
 metadata:
   {
     "openclaw": { "emoji": "🎫" },
@@ -9,7 +9,7 @@ metadata:
 
 # Jira Plugin Skill
 
-> 插件暴露 11 个 named tools，每个 tool 对应一个 Jira Cloud REST v3 method。agent 直接调 named tool 即可，不需要 dispatcher 包装。comment / create_task / create_subtask / submit_verdict / abandon_task / request_help 内部完成多步 Jira API 调用，agent 不需要自行组合。
+> 插件暴露 14 个 named tools，每个 tool 对应一个 Jira Cloud REST v3 method。agent 直接调 named tool 即可，不需要 dispatcher 包装。comment / create_task / create_subtask / submit_verdict / abandon_task / request_help 内部完成多步 Jira API 调用，agent 不需要自行组合。**upload_attachment 是 0.5.1 新增**，替代之前用裸 curl + ATST_TOKEN 上传的 workaround。
 
 ---
 
@@ -35,21 +35,26 @@ jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"
 命令退出码: `0`=成功, `5`=业务错误, `2`=JSON 解析错, `1`=无参数.
 
 > **`jira_create_task` / `jira_create_subtask` 的 `requirements` / `scope` / `acceptance_criteria` 3 字段全是纯文本字符串, 不是 ADF dict, 不是数组.** plugin 自动按 `## 任务说明 / ## 职责范围 / ## 验收标准` 3 段拼接成 description. 用 `\n` 换行.
+>
+> **`jira_comment` 的 `body` 也是纯文本 string, 不是 ADF dict.** plugin 自动包成 ADF. 用 `\n` 换行. **agent 永远不需要知道 ADF**.
 
 ---
 
-## 11 tool 速查
+## 14 tool 速查
 
-### 通用 (6)
+### 通用 (9)
 
 | tool | 用途 | 必填 | 常用选填 |
 |---|---|---|---|
 | `jira_search` | JQL 搜索 (默认 30 条) | `jql` | `maxResults`, `fields` |
-| `jira_get` | 读单 ticket 详情 (默认走白名单, 排除 comment/worklog) | `issueIdOrKey` | `fields` |
+| `jira_get` | 读单 ticket 详情 (默认走白名单, 含 attachment 最新 20 个) | `issueIdOrKey` | `fields` |
 | `jira_list_comments` | 拉 ticket 全部评论 (ADF → 纯文本 + mentions) | `issueIdOrKey` | `startAt`, `maxResults` (≤100), `orderBy`, `since` (ISO date, 客户端 filter), `authorAccountId` (客户端 filter) |
 | `jira_get_comment` | 读单条评论 (ADF → 纯文本 + mentions) | `issueIdOrKey`, `commentId` | — |
-| `jira_comment` | 给 ticket 加评论 (ADF dict body) | `issueIdOrKey`, `body` | `mentionMap` |
-| `jira_transition` | 转 ticket 状态 (按目标状态名) | `issueIdOrKey`, `targetStatus` | — |
+| `jira_comment` | 给 ticket 加评论 (**纯文本 string**) | `issueIdOrKey`, `body` (string) | `mentionAccountIds` (string[] of accountIds) |
+| `jira_list_attachments` | 列 ticket 所有附件 metadata (无 cap) | `issueIdOrKey` | — |
+| `jira_get_attachment` | 下载附件二进制到本地 (默认 `/tmp/openclaw-attachments/{id}.{ext}`) | `attachmentId` | `saveToPath` (绝对路径) |
+| **`jira_upload_attachment`** | **上传单个文件到 ticket (server-side read, 无需 base64 编码)** | `issueIdOrKey`, `filePath` (绝对路径) | — |
+| `jira_transition` | 转 ticket 状态 (**逻辑名**，项目无关) | `issueIdOrKey`, `targetStatus` (逻辑名) | — |
 
 ### 原子任务操作 (5)
 
@@ -70,20 +75,24 @@ jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"
 jira_get { issueIdOrKey: "SSSS-241" }
 ```
 
-### 场景 2: plan agent 写 Phase 计划评论
+### 场景 2: agent 写评论 (**纯文本，plugin 自动转 ADF**)
+
 ```
-jira_comment { issueIdOrKey: "SSSS-241", body: {
-  version: 1,
-  type: "doc",
-  content: [
-    {type: "heading", attrs: {level: 2}, content: [{type: "text", text: "Phase 拆解"}]},
-    {type: "bulletList", content: [
-      {type: "listItem", content: [{type: "paragraph", content: [{type: "text", text: "P1: 修 Save 持久化"}]}]},
-      {type: "listItem", content: [{type: "paragraph", content: [{type: "text", text: "P2: 接入 v3 auth"}]}]}
-    ]}
-  ]
-}}
+// 简单评论
+jira_comment { issueIdOrKey: "SSSS-241", body: "✅ Phase 1 完成，3/3 AC 验证通过" }
+
+// 多行评论（\n 转 hardBreak）
+jira_comment { issueIdOrKey: "SSSS-241", body: "第一行\n第二行\n第三行" }
+
+// 带 @mention
+jira_comment {
+  issueIdOrKey: "SSSS-241",
+  body: "请看一下这边的审批进度",
+  mentionAccountIds: ["5faab81caea468006ab5e23e"]
+}
 ```
+
+> **agent 只写 plain text，ADF 全部由 plugin 内部生成**. 不再需要 ADF dict 任何知识.
 
 ### 场景 3: plan agent 建主任务
 ```
@@ -118,10 +127,62 @@ jira_abandon_task { issueIdOrKey: "WTO-100", reason: "主任务重新规划, 改
 jira_request_help { issueIdOrKey: "SSSS-50", question: "需要确认 ABC 的优先级" }
 ```
 
-### 场景 8: 手动转状态
+### 场景 8: 手动转状态 (**逻辑名，跨项目通用**)
+
 ```
-jira_transition { issueIdOrKey: "WTO-100", targetStatus: "已完成" }
+// 项目无关的逻辑名（推荐）
+jira_transition { issueIdOrKey: "WTO-100", targetStatus: "in_progress" }  // → 任意项目"进行中"
+jira_transition { issueIdOrKey: "CP-1",    targetStatus: "done" }         // → SSSS 的 已完成 / CP 的 complete
+jira_transition { issueIdOrKey: "CP-1",    targetStatus: "review" }       // → Review / 审查 / In Review
+jira_transition { issueIdOrKey: "CP-1",    targetStatus: "blocked" }      // → 任意 Block* 状态
+jira_transition { issueIdOrKey: "CP-1",    targetStatus: "reopen" }       // → Reopen / 重新打开
+
+// 项目特有名字（last-resort fallback）
+jira_transition { issueIdOrKey: "CP-1",    targetStatus: "In Review" }     // 精确匹配
 ```
+
+**支持的逻辑名**: `todo` / `in_progress` / `done` / `review` / `blocked` / `reopen` / `cancelled` / `open` / `backlog` / `doing` / `active` / `closed` / `complete` / `completed` / `resolved` / `cancel`
+
+### 场景 9: 上传附件 (0.5.1 新增, 替代裸 curl workaround)
+
+```
+// 上传单个文件
+jira_upload_attachment { issueIdOrKey: "SSSS-454", filePath: "/tmp/screenshot.png" }
+
+// 上传测试证据 (tester agent 典型用例)
+jira_upload_attachment { issueIdOrKey: "SSSS-451", filePath: "/home/leoclaw/.openclaw/workspace-tester/test-evidence/SSSS-451/screenshots/sidebar.png" }
+
+// 上传 ops 截图
+jira_upload_attachment { issueIdOrKey: "SSSS-456", filePath: "/tmp/cb-build-log.txt" }
+```
+
+**返回结构**:
+```json
+{
+  "ok": true,
+  "method": "upload_attachment",
+  "request": { "issueIdOrKey": "SSSS-454", "filePath": "/tmp/screenshot.png", "size": 12345, "filename": "screenshot.png" },
+  "attachments": [
+    { "id": "13428", "filename": "screenshot.png", "size": 12345, "mimeType": "image/png", "content": ".../attachment/content/13428" }
+  ],
+  "summary": { "issueIdOrKey": "SSSS-454", "attachmentCount": 1 }
+}
+```
+
+**失败返回** (结构化错误):
+```json
+{ "ok": false, "error": { "status": 404, "message": "file not found: /tmp/missing.png" } }
+{ "ok": false, "error": { "status": 413, "message": "file too large (>100MB)" } }
+{ "ok": false, "error": { "status": 401, "message": "..." } }
+```
+
+**约束**:
+- 单文件最大 100MB (Jira 默认上限)
+- filePath 必须是 server-side 可读的绝对路径
+- 不需要 base64 编码, plugin 用 Node 内置 FormData + Blob 直传
+- 不再需要 agent 自己读 `~/.openclaw/openclaw.json` 拿 ATST_TOKEN + 拼 multipart 边界
+
+**何时用**: 之前 tester / opswing / opencode 需要 `curl -X POST ... -F file=@...` 上传附件的 workaround 全部废弃, 改调 `jira_upload_attachment` 即可。
 
 ---
 
@@ -198,17 +259,16 @@ jira_get_comment { issueIdOrKey: "SSSS-401", commentId: "10001" }
    → 纯文本 + mentions, 不付 ADF 成本
 
 5. 某条评论很关键, 想看完整原 ADF:
-   → 现阶段没有 raw ADF 工具. 需要的话用 Atlassian UI 或后续在 plugin 加 flag.
+   → 现阶段没有 raw ADF 工具. 需要的话用 Atlassian UI.
 ```
 
 ---
 
-## ADF Builder Guide (Atlassian Document Format)
+## ADF Builder Guide (Atlassian Document Format, plugin 内部)
 
 > **官方参考:** https://developer.atlassian.com/cloud/jira/platform/apis/document/structure
-> **ADF playground (可视化构造 + 实时 JSON 预览):** https://developer.atlassian.com/cloud/jira/platform/apis/document/playground
 
-ADF 是 Atlassian 的富文本 JSON 格式. **只 `jira_comment.body` 还接受 ADF** (因为评论是富文本). `jira_create_task` / `jira_create_subtask` 的 `requirements` / `scope` / `acceptance_criteria` 全部改为纯文本字符串 (0.5.0+) — plugin 自己拼 3 段 ADF, agent 不再需要给这 3 个字段写 ADF. plugin 工具**只校验 ADF 结构** (拦截 invalid → 返清晰错误), 不替你构造.
+ADF 是 Atlassian 的富文本 JSON 格式. **agent 永远不需要直接构造 ADF**——所有 agent-facing 参数都是 plain string, plugin 在内部构造 ADF (comment body / task description / verdict comment / escalate comment / help comment). 这一节只是开发者/调试参考.
 
 ### 顶层结构
 
@@ -638,7 +698,7 @@ assert not problems, problems  # OK 才发
 4. **`request_help` 仅主任务**: 子任务请用 `submit_verdict({verdict:"FAIL", reason})`. (会返清晰错误并指明替代方案)
 5. **`abandon_task` 仅子任务**: 主任务请用 `submit_verdict({verdict:"FAIL"})` 或 `request_help`.
 6. **`@mention` 用 ADF `mention` 节点 + `mentionMap`**: plugin 强校验 ADF mentions 和 map 的双射 (mentionMap 省略或 `{}` → 不做校验).
-7. **`transition` 用状态名不是 button label**: 例如 SSSS 项目用 "已完成" (状态名) 不是 "Done" (button label). 不确定时 `jira_get` 看当前 status, 或 `jira_transition` 返错时会列可用 transitions. Plugin 返错格式: "Available transitions (label → destination): To Do → 待办, In Progress → 正在进行, Done → 已完成".
+7. **`transition` / `submit_verdict` 现在项目无关**：两者都接受逻辑名 `done` / `in_progress` / `review` / `blocked` / `reopen` / `todo` / `cancelled`，plugin 内部用 Jira 的 `statusCategory` (平台级标准) 匹配。**不再需要知道项目特有的状态名**。不确定可用状态时调 `jira_get` 看当前 status，或看 transition 返错时的 `Available transitions` 列表。
 8. **`jira_get` 默认走白名单, 不拉 `comment` / `worklog`** (~80% context 节省 vs `*navigable`). 需要全量 → `fields: ['*all']`; 需要单个 custom field → `fields: ['customfield_10019']`. 评论另走 `jira_list_comments` (ADF → 纯文本, deduped mentions). 3 个上下文优化工具详见上面"上下文优化" section.
 9. **`jira_list_comments` / `jira_get_comment` 输出永远是纯文本, 不是 ADF**: plugin 自动 ADF → plain text. 所以**不要**把 `jira_list_comments` 的输出直接喂回 `jira_comment` 的 `body` (会被 Atlassian 当成 string body 拒掉). 要 reply 哪条评论, 手动写 ADF.
 

@@ -8,6 +8,9 @@
  * Notable: editmeta validation. If a field is not editable for the issue's
  * current screen scheme, Atlassian 400s with a clear message — we surface
  * the snippet unchanged.
+ *
+ * `description` field: accepts plain text. Plugin auto-wraps to ADF on the
+ * wire (Atlassian v3 requires ADF for description). No agent-facing ADF.
  */
 import { loadConfig } from "../auth.js";
 import { jiraPut, JiraHttpError } from "../http.js";

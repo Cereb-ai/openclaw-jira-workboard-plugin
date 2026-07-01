@@ -5,7 +5,7 @@
  *
  *   PASS
  *     1. POST  /rest/api/3/issue/{key}/comment  (verdict + summary + evidence)
- *     2. GET+POST /rest/api/3/issue/{key}/transitions  (→ "已完成")
+ *     2. GET+POST /rest/api/3/issue/{key}/transitions  (→ done statusCategory, see _transitions.ts)
  *
  *   FAIL
  *     1. POST  /rest/api/3/issue/{key}/comment  (verdict=FAIL + summary + reason)
@@ -26,18 +26,16 @@
 import { JiraPluginError, loadConfig } from "../auth.js";
 import { jiraGet, jiraPost, jiraPut, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
-import { buildCompleteComment, validateAdfContentNodes } from "./_adf.js";
+import { buildCompleteComment } from "./_adf.js";
+import {
+  describeAvailableTransitions,
+  findTransition,
+  type AtlassianTransition,
+} from "./_transitions.js";
 import type { ToolResult } from "../types.js";
 
 type Verdict = "PASS" | "FAIL";
-const TARGET_STATUS = "已完成";
 const ESCALATED_LABEL = "escalated";
-
-interface AtlassianTransition {
-  id: string;
-  name: string;
-  to?: { name?: string };
-}
 
 export async function submitVerdict(
   args: Record<string, unknown>,
@@ -86,19 +84,8 @@ export async function submitVerdict(
 
   // Step 1: post the verdict comment (always).
   const commentAdf = buildCompleteComment(verdict as Verdict, summary, evidence, reason);
-
-  // Validate ADF before sending — defense-in-depth (shares the same
-  // validation used by jira_comment). buildCompleteComment should never
-  // produce invalid ADF, but this catches regressions early.
-  const contentErr = validateAdfContentNodes(commentAdf as unknown as Record<string, unknown>);
-  if (contentErr) {
-    return textResult({
-      error:
-        `submit_verdict ADF structure error: ${contentErr}. ` +
-        `This should never happen — buildCompleteComment produces code-generated ADF. ` +
-        `Please report as a plugin bug.`,
-    });
-  }
+  // (No ADF validation needed: commentAdf is built by internal plugin code,
+  // never from agent-supplied ADF. If shape breaks, it's a plugin bug to fix.)
 
   let commentId: string | undefined;
   let commentSelf: string | undefined;
@@ -260,24 +247,19 @@ async function completeTransition(
     })
   }
 
-  const target = TARGET_STATUS.toLowerCase()
-  const match = transitions.find(
-    (t) => (t.to?.name ?? "").toLowerCase() === target,
-  )
+  const { match, matchedBy } = findTransition(transitions, "done");
   if (!match) {
-    const available = transitions.map(
-      (t) => `${t.name} → ${t.to?.name ?? "?"}`,
-    )
+    const available = describeAvailableTransitions(transitions);
     return textResult({
       ok: false,
       method: "submit_verdict",
       partial: true,
       comment: { id: commentId, self: commentSelf },
       error:
-        `targetStatus "${TARGET_STATUS}" not in available transitions for ${issueIdOrKey}: [${available.join(", ")}]. ` +
+        `No "done" category transition for ${issueIdOrKey}: [${available}]. ` +
         `Comment was already posted.`,
-      hint: "Available transitions (label → destination): " + available.join("; "),
-    })
+      hint: "Available transitions (name [category]): " + available,
+    });
   }
 
   try {
@@ -292,12 +274,14 @@ async function completeTransition(
         id: match.id,
         name: match.name,
         to: match.to?.name,
+        toCategory: match.to?.statusCategory?.key,
       },
       summary: {
         key: issueIdOrKey,
         verdict,
         commentId,
         transitionedTo: match.to?.name,
+        toCategory: match.to?.statusCategory?.key,
       },
     })
   } catch (err) {
@@ -309,7 +293,7 @@ async function completeTransition(
       comment: { id: commentId, self: commentSelf },
       hint:
         `Comment was posted (id=${commentId}) but the transition execute failed: ${msg}. ` +
-        `Use the generic \`transition\` method to move ${issueIdOrKey} to "${TARGET_STATUS}".`,
+        `Use \`jira_transition\` to move ${issueIdOrKey} to the appropriate done status.`,
       error:
         `jira.submit_verdict (step 2b: execute transition) failed: ${msg}. ` +
         `Comment was already posted.`,

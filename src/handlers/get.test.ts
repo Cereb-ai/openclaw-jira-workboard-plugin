@@ -171,9 +171,10 @@ describe("get default fields whitelist (SSSS-401)", () => {
     const callArgs = vi.mocked(jiraGet).mock.calls[0];
     const query = callArgs[2] as Record<string, string>;
     const fieldsList = query.fields.split(",");
-    // AC2 reverse-assertion: exactly 12 fields, issuelinks included.
-    expect(fieldsList).toHaveLength(12);
+    // AC2 reverse-assertion: exactly 13 fields, attachment + issuelinks included (0.5.0).
+    expect(fieldsList).toHaveLength(13);
     expect(fieldsList).toContain("issuelinks");
+    expect(fieldsList).toContain("attachment");
     expect(fieldsList).toContain("summary");
     expect(fieldsList).toContain("status");
     expect(fieldsList).toContain("description");

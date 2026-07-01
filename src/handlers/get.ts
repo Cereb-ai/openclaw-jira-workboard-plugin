@@ -43,11 +43,16 @@ import type { ToolResult } from "../types.js";
 /** Whitelisted Jira field names that jira_get fetches by default.
  *  Anything not in this list requires explicit `fields` opt-in.
  *
- *  Keep this list in sync with the SSSS-401 plan AC1 contract (12 items):
+ *  13th field (0.5.0+): `attachment` is included so agents can see
+ *  attachment metadata without an extra call. Cap is 20 most-recent
+ *  (see ATTACHMENT_CAP); if more exist, the response includes
+ *  `moreCount: N` so the agent can call jira_list_attachments for the
+ *  full list.
+ *
+ *  Keep this list in sync with the SSSS-401 plan AC1 contract:
  *    summary, status, issuetype, priority, labels, assignee, reporter,
- *    created, updated, parent, description, issuelinks
- *  Adding a 13th field or removing one breaks SSSS-404 AC2's reverse
- *  assertion. */
+ *    created, updated, parent, description, issuelinks, attachment
+ *  Adding or removing fields can break SSSS-404 AC2 reverse assertion. */
 const DEFAULT_FIELDS = [
   "summary",
   "status",
@@ -61,7 +66,33 @@ const DEFAULT_FIELDS = [
   "parent",
   "description",
   "issuelinks",
+  "attachment",
 ] as const;
+
+/** Max attachments returned by jira_get by default. The rest are NOT
+ *  truncated silently — instead `moreCount: N` is included so the agent
+ *  knows to call jira_list_attachments for the full list. */
+const ATTACHMENT_CAP = 20;
+
+/** Strip author.avatarUrls (~600B/att) from the surface to keep
+ *  jira_get responses small. The full attachment is still available
+ *  via jira_list_attachments. */
+function compactAttachment(a: Record<string, unknown>): Record<string, unknown> {
+  const author = a.author as { displayName?: string; accountId?: string } | undefined;
+  return {
+    id: a.id,
+    self: a.self,
+    filename: a.filename,
+    size: a.size,
+    mimeType: a.mimeType,
+    created: a.created,
+    content: a.content,
+    thumbnail: a.thumbnail,
+    author: author
+      ? { displayName: author.displayName, accountId: author.accountId }
+      : undefined,
+  };
+}
 
 export async function get(args: Record<string, unknown>): Promise<ToolResult> {
   let cfg;
@@ -126,6 +157,18 @@ export async function get(args: Record<string, unknown>): Promise<ToolResult> {
         ? (f.parent as { key?: string; fields?: { summary?: string } })
         : undefined;
 
+    // Compact the attachment list: cap at 20 most-recent + strip avatarUrls.
+    // The raw `attachment` field is still available under `fields.attachment`
+    // for callers that need the full list.
+    const rawAtt = Array.isArray(f.attachment) ? (f.attachment as Record<string, unknown>[]) : [];
+    const sortedAtt = [...rawAtt].sort((a, b) =>
+      String(b.created ?? "").localeCompare(String(a.created ?? "")),
+    );
+    const truncated = sortedAtt.length > ATTACHMENT_CAP;
+    const visibleAtt = truncated
+      ? sortedAtt.slice(0, ATTACHMENT_CAP).map(compactAttachment)
+      : sortedAtt.map(compactAttachment);
+
     return textResult({
       ok: true,
       method: "get",
@@ -150,6 +193,14 @@ export async function get(args: Record<string, unknown>): Promise<ToolResult> {
         // {id, type.name, outwardIssue.key, ...} per link.
         issuelinks: f.issuelinks ?? [],
         description: f.description ?? null,
+        // 20 most-recent attachments (sorted by created desc, avatarUrls
+        // stripped). `attachmentCount` is the total; `moreCount` is set when
+        // we hit the cap — agent should call jira_list_attachments for the
+        // full list. Use `jira_get { fields: ['attachment'] }` to bypass
+        // the cap and see the raw array.
+        attachments: visibleAtt,
+        attachmentCount: rawAtt.length,
+        ...(truncated ? { moreCount: rawAtt.length - ATTACHMENT_CAP } : {}),
         // Carry through the full fields object so callers can drill into
         // anything we didn't surface. Cheap because the field list is
         // already filtered server-side by the `fields` query param.

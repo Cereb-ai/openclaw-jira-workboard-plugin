@@ -121,7 +121,7 @@ describe("submit_verdict FAIL escalation (SSSS-252)", () => {
     vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" }); // comment
     vi.mocked(jiraGet).mockResolvedValueOnce({
       transitions: [
-        { id: "11", name: "Done", to: { name: "已完成" } },
+        { id: "11", name: "Done", to: { name: "已完成", statusCategory: { id: 3, key: "done" } } },
       ],
     });
     vi.mocked(jiraPost).mockResolvedValueOnce({}); // transition execute
@@ -138,6 +138,7 @@ describe("submit_verdict FAIL escalation (SSSS-252)", () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.summary.verdict).toBe("PASS");
     expect(parsed.summary.transitionedTo).toBe("已完成");
+    expect(parsed.summary.toCategory).toBe("done");
     // No label add PUT for PASS
     expect(jiraPut).not.toHaveBeenCalled();
   });

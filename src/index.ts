@@ -23,6 +23,9 @@ import { submitVerdict } from "./handlers/submit_verdict.js";
 import { abandonTask } from "./handlers/abandon_task.js";
 import { requestHelp } from "./handlers/request_help.js";
 import { transition } from "./handlers/transition.js";
+import { listAttachments } from "./handlers/list_attachments.js";
+import { getAttachment } from "./handlers/get_attachment.js";
+import { uploadAttachment } from "./handlers/upload_attachment.js";
 
 /**
  * Bridge plugin config (from openclaw.json) into the module-level state
@@ -147,23 +150,13 @@ export default defineToolPlugin({
       name: "jira_comment",
       label: "Jira Comment",
       description:
-        "Add a comment to a ticket. Body MUST be an ADF dict (not a plain string): {version:1, type:'doc', content:[{type:'paragraph', content:[{type:'text', text:'...'}]}]}. For @mention use ADF mention nodes + mentionMap (strict bijection).",
+        "Add a plain-text comment to a ticket. Body is a string — NOT ADF. Plugin auto-wraps into ADF internally. Use `\\n` for line breaks. Optional `mentionAccountIds` to @mention users (string[] of accountIds).",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Issue key" }),
-        body: Type.Object(
-          {
-            version: Type.Literal(1),
-            type: Type.Literal("doc"),
-            content: Type.Array(
-              Type.Object({}, { additionalProperties: true }),
-            ),
-          },
-          { description: "ADF document" },
-        ),
-        mentionMap: Type.Optional(
-          Type.Record(Type.String(), Type.String(), {
-            description:
-              "Optional {name: accountId} map. Plugin enforces strict bijection with ADF mention nodes.",
+        body: Type.String({ description: "Comment body (plain text). Use \\n for line breaks. Plugin auto-wraps to ADF." }),
+        mentionAccountIds: Type.Optional(
+          Type.Array(Type.String(), {
+            description: "Optional list of Atlassian accountIds to @mention in this comment.",
           }),
         ),
       }),
@@ -299,14 +292,69 @@ export default defineToolPlugin({
       name: "jira_transition",
       label: "Jira Transition",
       description:
-        "Transition a ticket to a target status by status name (e.g. 'In Progress', 'Done', '已完成'). Not by transition button label.",
+        "Transition a ticket to a target status. Accepts LOGICAL names project-agnostically: 'todo' / 'in_progress' / 'done' / 'review' / 'blocked' / 'reopen' / 'cancelled'. Falls back to exact project status name. NOT by transition button label.",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Issue key" }),
-        targetStatus: Type.String({ description: "Target status name" }),
+        targetStatus: Type.String({
+          description:
+            "Logical name (preferred): 'todo' / 'in_progress' / 'done' / 'review' / 'blocked' / 'reopen' / 'cancelled'. Or pass the project's exact status name as last-resort fallback.",
+        }),
       }),
       async execute(params, config) {
         applyConfig(config);
         return await transition(params);
+      },
+    }),
+    tool({
+      name: "jira_list_attachments",
+      label: "Jira List Attachments",
+      description:
+        "List ALL attachment metadata on a ticket (no cap). Use when jira_get's `moreCount: N` indicates there are unlisted attachments, or when you need a full enumeration. Returns [{id, filename, size, mimeType, content URL, thumbnail URL, author, created}, ...]. NO file content — use jira_get_attachment for the actual bytes.",
+      parameters: Type.Object({
+        issueIdOrKey: Type.String({ description: "Issue key like 'SSSS-432'" }),
+      }),
+      async execute(params, config) {
+        applyConfig(config);
+        return await listAttachments(params);
+      },
+    }),
+    tool({
+      name: "jira_get_attachment",
+      label: "Jira Get Attachment",
+      description:
+        "Download an attachment's binary content to disk. Returns the saved file path (NOT base64 — that would balloon LLM context for large files). Default save path: /tmp/openclaw-attachments/{id}.{ext} (not inside the OpenClaw system dir). Use `saveToPath` to override. Call jira_list_attachments first to get the attachmentId for the file you want.",
+      parameters: Type.Object({
+        attachmentId: Type.String({
+          description:
+            "Attachment id (string from jira_list_attachments or jira_get.attachments[].id).",
+        }),
+        saveToPath: Type.Optional(
+          Type.String({
+            description:
+              "Optional full file path to save to. Default: /tmp/openclaw-attachments/{id}.{ext} derived from mimeType. Caller is responsible for ensuring the dir exists when overriding.",
+          }),
+        ),
+      }),
+      async execute(params, config) {
+        applyConfig(config);
+        return await getAttachment(params);
+      },
+    }),
+    tool({
+      name: "jira_upload_attachment",
+      label: "Jira Upload Attachment",
+      description:
+        "Upload a single local file to a Jira issue. Pass an absolute `filePath`; the plugin reads the file and POSTs it as a multipart/form-data attachment. 100 MB hard cap (Atlassian Cloud per-file limit). Returns the created attachment metadata (id, filename, size, mimeType, content URL).",
+      parameters: Type.Object({
+        issueIdOrKey: Type.String({ description: "Issue key like 'SSSS-454'" }),
+        filePath: Type.String({
+          description:
+            "Absolute path to the file to upload (server-side). Plugin reads from disk and uploads the bytes; the filename on Jira is basename(filePath).",
+        }),
+      }),
+      async execute(params, config) {
+        applyConfig(config);
+        return await uploadAttachment(params);
       },
     }),
   ],

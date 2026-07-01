@@ -2,28 +2,29 @@
  * jira.transition — state machine flow.
  *
  * Two REST round-trips per call:
- *   1. GET  /rest/api/3/issue/{key}/transitions  → list of {id, name, to: {name}}
+ *   1. GET  /rest/api/3/issue/{key}/transitions  → list of {id, name, to: {name, statusCategory}}
  *   2. POST /rest/api/3/issue/{key}/transitions  body: {transition: {id}}
  *
- * The caller supplies the destination status NAME (e.g. "In Progress" / "Done"
- * / "REVIEW"). We match by case-insensitive exact match on the transition's
- * `to.name` field. If not found, fail-fast with a list of available
- * transitions (so the agent can pick a valid one).
+ * Project-agnostic: targetStatus accepts LOGICAL names ("done" / "in_progress" /
+ * "review" / "blocked" / "reopen" / "todo") that map to Jira's statusCategory
+ * (platform-level standard). Falls back to exact name match for non-standard
+ * project statuses. See `_transitions.ts` for the full mapping table.
  *
- * Why name→id lookup server-side? The transition id is project-specific and
- * can change if an admin edits the workflow. The status name is the stable
- * user-facing handle.
+ * Examples:
+ *   jira_transition { issueIdOrKey:"SSSS-1", targetStatus:"in_progress" }  // → 任意"进行中"
+ *   jira_transition { issueIdOrKey:"CP-1",   targetStatus:"done" }          // → CP 的 complete
+ *   jira_transition { issueIdOrKey:"CP-1",   targetStatus:"review" }       // → 审查/Review/In Review
+ *   jira_transition { issueIdOrKey:"CP-1",   targetStatus:"In Review" }   // → exact-name fallback
  */
 import { loadConfig } from "../auth.js";
 import { jiraGet, jiraPost, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
+import {
+  describeAvailableTransitions,
+  findTransition,
+  type AtlassianTransition,
+} from "./_transitions.js";
 import type { ToolResult } from "../types.js";
-
-interface AtlassianTransition {
-  id: string;
-  name: string;
-  to?: { name?: string };
-}
 
 export async function transition(
   args: Record<string, unknown>,
@@ -38,13 +39,16 @@ export async function transition(
   const issueIdOrKey = args.issueIdOrKey;
   if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
     return textResult({
-      error: "transition requires a non-empty `issueIdOrKey` (string) argument.",
+      error: "transition requires a non-empty `issueIdOrKey` (string).",
     });
   }
   const targetStatus = args.targetStatus;
   if (typeof targetStatus !== "string" || targetStatus.trim().length === 0) {
     return textResult({
-      error: "transition requires `targetStatus` (string, e.g. 'In Progress' / 'Done' / 'REVIEW').",
+      error:
+        "transition requires `targetStatus` (string). Use logical names: " +
+        "'todo' / 'in_progress' / 'done' / 'review' / 'blocked' / 'reopen' / 'cancelled'. " +
+        "Or pass the project's exact status name as last-resort fallback.",
     });
   }
 
@@ -71,25 +75,20 @@ export async function transition(
     return textResult({
       error:
         `No transitions available for ${issueIdOrKey} — ` +
-        `the issue may be in a terminal state (Done/Closed) or the workflow has no outgoing edges from the current status.`,
+        `the issue may be in a terminal state (done) or the workflow has no outgoing edges from the current status.`,
     });
   }
 
-  // Match by case-insensitive exact match on the destination name.
-  const target = targetStatus.trim().toLowerCase();
-  const match = transitions.find(
-    (t) => (t.to?.name ?? "").toLowerCase() === target,
-  );
+  // Resolve via 3-tier matcher (logical / business-pattern / exact-name).
+  const { match, matchedBy } = findTransition(transitions, targetStatus);
   if (!match) {
-    const available = transitions.map(
-      (t) => `${t.name} → ${t.to?.name ?? "?"}`,
-    );
+    const available = describeAvailableTransitions(transitions);
     return textResult({
       error:
-        `targetStatus "${targetStatus}" not in available transitions for ${issueIdOrKey}: [${available.join(", ")}]. ` +
-        "Note: targetStatus is the destination status name, not the transition button label. " +
-        "Run jira.get on the issue first to see the current status, then re-check the workflow.",
-      hint: "Available transitions (label → destination): " + available.join("; "),
+        `targetStatus "${targetStatus}" did not match any available transition for ${issueIdOrKey}: [${available}]. ` +
+        "Use a logical name (done / in_progress / review / blocked / reopen / cancelled / todo) " +
+        "or the project's exact status name.",
+      hint: "Available transitions (name [category]): " + available,
     });
   }
 
@@ -101,16 +100,18 @@ export async function transition(
     return textResult({
       ok: true,
       method: "transition",
-      request: { issueIdOrKey, targetStatus },
+      request: { issueIdOrKey, targetStatus, resolvedBy: matchedBy },
       transition: {
         id: match.id,
         name: match.name,
         to: match.to?.name,
+        category: match.to?.statusCategory?.key,
       },
       summary: {
         key: issueIdOrKey,
-        from: "see jira.get current status",
         to: match.to?.name,
+        toCategory: match.to?.statusCategory?.key,
+        matchedBy,
       },
     });
   } catch (err) {

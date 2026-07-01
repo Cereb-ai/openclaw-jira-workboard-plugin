@@ -2,7 +2,7 @@
  * jira.create — POST /rest/api/3/issue.
  *
  * Required: project (key), issuetype (name), summary.
- * Optional: description (ADF dict), assignee, labels, priority, parent.
+ * Optional: description (auto-wrapped ADF from plain text), assignee, labels, priority, parent.
  *
  * Returns the created issue's key + id + URL.
  */

@@ -60,7 +60,7 @@ function truncate(s: string, n: number): string {
 const PROXIED_HOSTNAME = "api.atlassian.com";
 
 /** Build a URL for the given REST path under the Atlassian cloud root. */
-function buildUrl(
+export function buildUrl(
   cfg: JiraConfig,
   path: string,
   query?: Record<string, string | number | boolean | undefined>,
@@ -77,7 +77,7 @@ function buildUrl(
   return url.toString();
 }
 
-function authHeaders(cfg: JiraConfig): Record<string, string> {
+export function authHeaders(cfg: JiraConfig): Record<string, string> {
   return {
     Authorization: `Bearer ${cfg.atstToken}`,
     "Content-Type": "application/json",
