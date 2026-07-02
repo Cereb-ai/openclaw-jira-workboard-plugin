@@ -238,7 +238,7 @@ export default defineToolPlugin({
       name: "jira_submit_verdict",
       label: "Jira Submit Verdict",
       description:
-        "Close out a task. verdict=PASS 评论 + 转「已完成」; verdict=FAIL 评论 + escalated label + 清 assignee. reason 必填 (FAIL 时).",
+        "⚠️ ATOMIC — 一次调用即关闭 ticket，不需要再额外调用 jira_transition。verdict=PASS: 自动发评论 + 转「已完成」; verdict=FAIL: 自动发评论 + 加 escalated label + 清 assignee。reason 必填 (FAIL 时). 调完别再 transition 会覆盖已转好的状态。",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Issue key" }),
         verdict: Type.Union(
@@ -292,7 +292,7 @@ export default defineToolPlugin({
       name: "jira_transition",
       label: "Jira Transition",
       description:
-        "Transition a ticket to a target status. Accepts LOGICAL names project-agnostically: 'todo' / 'in_progress' / 'done' / 'review' / 'blocked' / 'reopen' / 'cancelled'. Falls back to exact project status name. NOT by transition button label.",
+        "⚠️ 调试/人为干预专用 — 正常 ticket 生命周期请用 jira_submit_verdict（PASS/FAIL 自动 close）。普通 agent 不应主动调本方法（会绕过 verdict 流程 + 丢失审计），仅 cereb-pilot dispatcher 或 Leo 手动修复 stuck state 时使用。Logical names: 'todo' / 'in_progress' / 'done' / 'review' / 'blocked' / 'reopen' / 'cancelled' (project-agnostic). Falls back to exact project status name.",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Issue key" }),
         targetStatus: Type.String({
