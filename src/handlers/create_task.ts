@@ -86,17 +86,19 @@ export async function createTask(
     });
   }
 
-  // Optional: priority (default Medium), labels (default ["plan"]).
+  // Optional: priority (default Medium). labels always includes "plan"
+  // (tool contract: "plan label is auto-added"), then any extra labels.
   const priority =
     typeof args.priority === "string" && args.priority.trim().length > 0
       ? args.priority
       : DEFAULT_PRIORITY;
-  const labels =
+  const extraLabels =
     Array.isArray(args.labels) && args.labels.length > 0
       ? (args.labels as unknown[]).filter(
           (l): l is string => typeof l === "string" && l.length > 0,
         )
-      : DEFAULT_LABELS;
+      : [];
+  const labels = ["plan", ...extraLabels];
 
   const description = buildTaskDescription(
     requirements,
