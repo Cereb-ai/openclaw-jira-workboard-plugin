@@ -147,13 +147,10 @@ jira_transition { issueIdOrKey: "CP-1",    targetStatus: "In Review" }     // �
 
 ```
 // 上传单个文件
-jira_upload_attachment { issueIdOrKey: "SSSS-454", filePath: "/tmp/screenshot.png" }
+jira_upload_attachment { issueIdOrKey: "<issue-key>", filePath: "/path/to/screenshot.png" }
 
-// 上传测试证据 (tester agent 典型用例)
-jira_upload_attachment { issueIdOrKey: "SSSS-451", filePath: "/home/leoclaw/.openclaw/workspace-tester/test-evidence/SSSS-451/screenshots/sidebar.png" }
-
-// 上传 ops 截图
-jira_upload_attachment { issueIdOrKey: "SSSS-456", filePath: "/tmp/cb-build-log.txt" }
+// 上传多个文件 (换 filePath 重复调用即可)
+jira_upload_attachment { issueIdOrKey: "<issue-key>", filePath: "/path/to/evidence.png" }
 ```
 
 **返回结构**:
@@ -182,7 +179,7 @@ jira_upload_attachment { issueIdOrKey: "SSSS-456", filePath: "/tmp/cb-build-log.
 - 不需要 base64 编码, plugin 用 Node 内置 FormData + Blob 直传
 - 不再需要 agent 自己读 `~/.openclaw/openclaw.json` 拿 ATST_TOKEN + 拼 multipart 边界
 
-**何时用**: 之前 tester / opswing / opencode 需要 `curl -X POST ... -F file=@...` 上传附件的 workaround 全部废弃, 改调 `jira_upload_attachment` 即可。
+**何时用**: 之前用 `curl -X POST ... -F file=@...` 上传附件的 workaround 全部废弃, 改调 `jira_upload_attachment` 即可。
 
 ---
 
