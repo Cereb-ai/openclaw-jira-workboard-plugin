@@ -58,11 +58,11 @@ export function setPluginConfig(cfg: Partial<JiraConfig> | null): void {
 /**
  * Default proxy: empty string = no proxy, connect directly.
  *
- * The previous hardcoded "http://172.29.176.1:7890" (WSL2 host gateway IP)
- * silently routed Jira traffic through the developer's local proxy outside
- * of any explicit configuration. Empty default makes proxy opt-in: callers
- * must set JIRA_PROXY (env or openclaw.json config override) to route
- * through a proxy.
+ * The previous default pointed at a developer's WSL2 host gateway proxy IP,
+ * which silently routed Jira traffic through a local proxy outside of any
+ * explicit configuration. Empty default makes proxy opt-in: callers must
+ * set JIRA_PROXY (env or openclaw.json config override) to route through
+ * a proxy.
  */
 const DEFAULT_PROXY = "";
 

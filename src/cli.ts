@@ -71,7 +71,7 @@ function printUsage(): void {
       `Env (same as OpenClaw plugin):`,
       `  ATST_TOKEN     OAuth 2.0 3LO access token (required)`,
       `  JIRA_CLOUD_ID  Atlassian Cloud ID (required)`,
-      `  JIRA_PROXY     HTTP proxy URL (optional, default http://172.29.176.1:7890)`,
+      `  JIRA_PROXY     HTTP proxy URL (optional, default http://proxy.example.com:8080)`,
       ``,
       `Output: JSON to stdout on success; non-zero exit + JSON error on stderr on failure.`,
     ].join("\n"),

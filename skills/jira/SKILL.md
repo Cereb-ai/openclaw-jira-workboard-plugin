@@ -710,7 +710,7 @@ assert not problems, problems  # OK 才发
 |---|---|---|---|
 | `ATST_TOKEN` | ✅ | — | OAuth 2.0 3LO access token (Bearer 头) |
 | `JIRA_CLOUD_ID` | ✅ | — | Atlassian Cloud ID (UUID) |
-| `JIRA_PROXY` | ❌ | `http://172.29.176.1:7890` | HTTP 代理 |
+| `JIRA_PROXY` | ❌ | `http://proxy.example.com:8080` | HTTP 代理 |
 
 任一 required env 未设 → 启动时 fail-fast 返清晰错误，不静默退化。
 

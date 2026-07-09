@@ -43,7 +43,7 @@ jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"
 |---|---|---|---|
 | `ATST_TOKEN` | ✅ | — | OAuth 2.0 3LO access token (Bearer 头) |
 | `JIRA_CLOUD_ID` | ✅ | — | Atlassian Cloud ID (UUID) |
-| `JIRA_PROXY` | ❌ | `http://172.29.176.1:7890` | HTTP 代理 |
+| `JIRA_PROXY` | ❌ | `http://proxy.example.com:8080` | HTTP 代理 |
 
 openclaw.json 的 `plugins.entries.jira-openclaw-plugin.config` 字段 (atstToken / cloudId / proxy) 优先于 env 变量（用于本地 dev override）。
 
