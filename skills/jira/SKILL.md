@@ -19,7 +19,7 @@ metadata:
 
 ```json
 jira_search { jql: "project = WTO AND status != Done" }
-jira_get { issueIdOrKey: "WTO-71" }
+jira_get { issueIdOrKey: "<issue-key>" }
 jira_create_task { project: "WTO", summary: "...", requirements: "...", scope: "...", acceptance_criteria: "..." }
 ```
 
@@ -27,9 +27,9 @@ jira_create_task { project: "WTO", summary: "...", requirements: "...", scope: "
 
 ```bash
 jira-tool search '{"jql":"project = WTO AND status != Done"}'
-jira-tool get '{"issueIdOrKey":"WTO-71"}'
+jira-tool get '{"issueIdOrKey":"<issue-key>"}'
 jira-tool create_task '{"project":"WTO","summary":"...","requirements":"...","scope":"...","acceptance_criteria":"..."}'
-jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"done"}'
+jira-tool submit_verdict '{"issueIdOrKey":"<issue-key>","verdict":"PASS","summary":"done"}'
 ```
 
 命令退出码: `0`=成功, `5`=业务错误, `2`=JSON 解析错, `1`=无参数.
@@ -72,21 +72,21 @@ jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"
 
 ### 场景 1: 查 main 任务状态
 ```
-jira_get { issueIdOrKey: "SSSS-241" }
+jira_get { issueIdOrKey: "<issue-key>" }
 ```
 
 ### 场景 2: agent 写评论 (**纯文本，plugin 自动转 ADF**)
 
 ```
 // 简单评论
-jira_comment { issueIdOrKey: "SSSS-241", body: "✅ Phase 1 完成，3/3 AC 验证通过" }
+jira_comment { issueIdOrKey: "<issue-key>", body: "✅ Phase 1 完成，3/3 AC 验证通过" }
 
 // 多行评论（\n 转 hardBreak）
-jira_comment { issueIdOrKey: "SSSS-241", body: "第一行\n第二行\n第三行" }
+jira_comment { issueIdOrKey: "<issue-key>", body: "第一行\n第二行\n第三行" }
 
 // 带 @mention
 jira_comment {
-  issueIdOrKey: "SSSS-241",
+  issueIdOrKey: "<issue-key>",
   body: "请看一下这边的审批进度",
   mentionAccountIds: ["5faab81caea468006ab5e23e"]
 }
@@ -109,29 +109,29 @@ jira_create_task {
 
 ### 场景 4: 子任务 PASS
 ```
-jira_submit_verdict { issueIdOrKey: "WTO-100", verdict: "PASS", summary: "code 完成, 5/5 tests pass" }
+jira_submit_verdict { issueIdOrKey: "<issue-key>", verdict: "PASS", summary: "code 完成, 5/5 tests pass" }
 ```
 
 ### 场景 5: 子任务 FAIL (外部阻塞)
 ```
-jira_submit_verdict { issueIdOrKey: "WTO-100", verdict: "FAIL", summary: "blocked on X", reason: "X 系统升级, 预计明天恢复" }
+jira_submit_verdict { issueIdOrKey: "<issue-key>", verdict: "FAIL", summary: "blocked on X", reason: "X 系统升级, 预计明天恢复" }
 ```
 
 ### 场景 6: 重新规划 → 废弃子任务
 ```
-jira_abandon_task { issueIdOrKey: "WTO-100", reason: "主任务重新规划, 改用代码分析路径" }
+jira_abandon_task { issueIdOrKey: "<issue-key>", reason: "主任务重新规划, 改用代码分析路径" }
 ```
 
 ### 场景 7: 主任务卡住 → 找人
 ```
-jira_request_help { issueIdOrKey: "SSSS-50", question: "需要确认 ABC 的优先级" }
+jira_request_help { issueIdOrKey: "<issue-key>", question: "需要确认 ABC 的优先级" }
 ```
 
 ### 场景 8: 手动转状态 (**逻辑名，跨项目通用**)
 
 ```
 // 项目无关的逻辑名（推荐）
-jira_transition { issueIdOrKey: "WTO-100", targetStatus: "in_progress" }  // → 任意项目"进行中"
+jira_transition { issueIdOrKey: "<issue-key>", targetStatus: "in_progress" }  // → 任意项目"进行中"
 jira_transition { issueIdOrKey: "CP-1",    targetStatus: "done" }         // → SSSS 的 已完成 / CP 的 complete
 jira_transition { issueIdOrKey: "CP-1",    targetStatus: "review" }       // → Review / 审查 / In Review
 jira_transition { issueIdOrKey: "CP-1",    targetStatus: "blocked" }      // → 任意 Block* 状态
@@ -158,11 +158,11 @@ jira_upload_attachment { issueIdOrKey: "<issue-key>", filePath: "/path/to/eviden
 {
   "ok": true,
   "method": "upload_attachment",
-  "request": { "issueIdOrKey": "SSSS-454", "filePath": "/tmp/screenshot.png", "size": 12345, "filename": "screenshot.png" },
+  "request": { "issueIdOrKey": "<issue-key>", "filePath": "/tmp/screenshot.png", "size": 12345, "filename": "screenshot.png" },
   "attachments": [
     { "id": "13428", "filename": "screenshot.png", "size": 12345, "mimeType": "image/png", "content": ".../attachment/content/13428" }
   ],
-  "summary": { "issueIdOrKey": "SSSS-454", "attachmentCount": 1 }
+  "summary": { "issueIdOrKey": "<issue-key>", "attachmentCount": 1 }
 }
 ```
 
@@ -190,7 +190,7 @@ jira_upload_attachment { issueIdOrKey: "<issue-key>", filePath: "/path/to/eviden
 ### `jira_get` 默认白名单 (server-side fields whitelist)
 
 ```json
-jira_get { issueIdOrKey: "SSSS-401" }
+jira_get { issueIdOrKey: "<issue-key>" }
 ```
 
 默认不带任何参数 → plugin **服务端** 走 `fields` query param 限定白名单:
@@ -206,9 +206,9 @@ assignee, reporter, created, updated, parent, description
 
 **怎么扩**:
 ```json
-jira_get { issueIdOrKey: "SSSS-401", fields: ["*all"] }                  // 全量 (相当于 *navigable)
-jira_get { issueIdOrKey: "SSSS-401", fields: ["customfield_10019"] }     // 单 custom field
-jira_get { issueIdOrKey: "SSSS-401", fields: ["summary","status","customfield_10019"] }  // 混搭
+jira_get { issueIdOrKey: "<issue-key>", fields: ["*all"] }                  // 全量 (相当于 *navigable)
+jira_get { issueIdOrKey: "<issue-key>", fields: ["customfield_10019"] }     // 单 custom field
+jira_get { issueIdOrKey: "<issue-key>", fields: ["summary","status","customfield_10019"] }  // 混搭
 ```
 
 返回结构不变: `issue.summary` / `issue.status` / `issue.description` / `issue.fields` (curated fields dict, **不含** comment/worklog).
@@ -216,8 +216,8 @@ jira_get { issueIdOrKey: "SSSS-401", fields: ["summary","status","customfield_10
 ### `jira_list_comments`
 
 ```json
-jira_list_comments { issueIdOrKey: "SSSS-401", maxResults: 20, orderBy: "-created" }
-jira_list_comments { issueIdOrKey: "SSSS-401", since: "2026-06-15T00:00:00.000+0800", authorAccountId: "712020:42e79d90-..." }
+jira_list_comments { issueIdOrKey: "<issue-key>", maxResults: 20, orderBy: "-created" }
+jira_list_comments { issueIdOrKey: "<issue-key>", since: "2026-06-15T00:00:00.000+0800", authorAccountId: "712020:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx..." }
 ```
 
 - 走 `GET /issue/{key}/comment`, 默认 `maxResults=50` 上限 100, `orderBy="-created"` (最新在前)
@@ -225,13 +225,13 @@ jira_list_comments { issueIdOrKey: "SSSS-401", since: "2026-06-15T00:00:00.000+0
 - 每个 comment 带 `mentions: [{accountId, displayName}]` 列表 — 回答 "谁被 @ 了" 这个高频问题不需要回扫 ADF
 - `startAt` 用于翻页 (Atlassian 默认 50 一页)
 - `since` (可选, ISO date string) — **客户端 filter**: 保留 `created >= since` 的评论. 留空 / 省略 → 不过滤, 不 throw. 非法 ISO string → 软错误. 例: `"2026-06-15"` 或 `"2026-06-15T10:00:00.000+0800"`.
-- `authorAccountId` (可选, string) — **客户端 filter**: 保留 `author.accountId` 匹配的评论. 留空 / 省略 → 不过滤, 不 throw. 例: `"712020:42e79d90-a6eb-45e7-ac69-f2872f3b89b1"`.
+- `authorAccountId` (可选, string) — **客户端 filter**: 保留 `author.accountId` 匹配的评论. 留空 / 省略 → 不过滤, 不 throw. 例: `"712020:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"`.
 - `rawCount` 字段返回过滤前数量, `count` 返回过滤后数量, 方便 agent 评估过滤效果.
 
 ### `jira_get_comment`
 
 ```json
-jira_get_comment { issueIdOrKey: "SSSS-401", commentId: "10001" }
+jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 ```
 
 - 走 `GET /issue/{key}/comment/{id}`, 两个参数都必填 (Atlassian 的 comment id 只在 issue 内唯一)
@@ -525,7 +525,7 @@ def collect_mentions(adf: dict[str, Any]) -> dict[str, str]:
 ### 3. 完整使用示例 (建子任务评论)
 
 ```python
-# 场景: 给 WTO-100 加一段 Phase 总结评论
+# 场景: 给 <issue-key> 加一段 Phase 总结评论
 body = doc(
     heading(2, "Phase 完成总结"),
     paragraph(text("P1 修 Save 持久化 "), text("已完成"), text(" (5/5 tests pass)")),
@@ -544,7 +544,7 @@ import json, subprocess
 subprocess.run([
     "jira-tool", "comment",
     json.dumps({
-        "issueIdOrKey": "WTO-100",
+        "issueIdOrKey": "<issue-key>",
         "body": body,
         "mentionMap": mention_map,
     }, ensure_ascii=False),
