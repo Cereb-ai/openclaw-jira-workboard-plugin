@@ -99,15 +99,15 @@ Any missing required variable → fail-fast at startup with an actionable error 
 
 ```json
 jira_search { jql: "project = WTO AND status != Done" }
-jira_get { issueIdOrKey: "WTO-71" }
+jira_get { issueIdOrKey: "<issue-key>" }
 ```
 
 **Standalone CLI** `jira-tool` (for OpenCode, terminal, CI):
 
 ```bash
 jira-tool search '{"jql":"project = WTO AND status != Done"}'
-jira-tool get '{"issueIdOrKey":"WTO-71"}'
-jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"done"}'
+jira-tool get '{"issueIdOrKey":"<issue-key>"}'
+jira-tool submit_verdict '{"issueIdOrKey":"<issue-key>","verdict":"PASS","summary":"done"}'
 ```
 
 Exit codes: `0` = success, `5` = business error, `2` = JSON parse error, `1` = missing args.
