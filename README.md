@@ -4,7 +4,7 @@
 [![Version](https://img.shields.io/badge/version-0.5.1-blue.svg)](package.json)
 [![OpenClaw](https://img.shields.io/badge/OpenClaw-%3E%3D2026.5.17-purple.svg)](https://docs.openclaw.ai)
 
-OpenClaw native plugin for Jira Cloud REST API v3 — exposes 14 named tools (one per Jira REST method), each invocable directly from an OpenClaw agent or the bundled `jira-tool` CLI. Replaces the legacy `mcporter call atlassian.*` channel.
+OpenClaw native plugin for Jira Cloud REST API v3 — exposes 14 named tools (one per Jira REST method), each invocable directly from an OpenClaw agent or the bundled `jira-tool` CLI. Replaces the legacy single-dispatcher `atlassian.*` tool.
 
 ## Features
 
@@ -98,14 +98,14 @@ Any missing required variable → fail-fast at startup with an actionable error 
 **OpenClaw native tool** (default for agents):
 
 ```json
-jira_search { jql: "project = WTO AND status != Done" }
+jira_search { jql: "project = <project-key> AND status != Done" }
 jira_get { issueIdOrKey: "<issue-key>" }
 ```
 
 **Standalone CLI** `jira-tool` (for OpenCode, terminal, CI):
 
 ```bash
-jira-tool search '{"jql":"project = WTO AND status != Done"}'
+jira-tool search '{"jql":"project = <project-key> AND status != Done"}'
 jira-tool get '{"issueIdOrKey":"<issue-key>"}'
 jira-tool submit_verdict '{"issueIdOrKey":"<issue-key>","verdict":"PASS","summary":"done"}'
 ```

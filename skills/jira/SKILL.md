@@ -18,7 +18,7 @@ metadata:
 **OpenClaw 原生 tool** (agent 默认) — 直接调 named tool:
 
 ```json
-jira_search { jql: "project = WTO AND status != Done" }
+jira_search { jql: "project = <project-key> AND status != Done" }
 jira_get { issueIdOrKey: "<issue-key>" }
 jira_create_task { project: "WTO", summary: "...", requirements: "...", scope: "...", acceptance_criteria: "..." }
 ```
@@ -26,7 +26,7 @@ jira_create_task { project: "WTO", summary: "...", requirements: "...", scope: "
 **CLI 二进制** (OpenCode / 终端 / CI):
 
 ```bash
-jira-tool search '{"jql":"project = WTO AND status != Done"}'
+jira-tool search '{"jql":"project = <project-key> AND status != Done"}'
 jira-tool get '{"issueIdOrKey":"<issue-key>"}'
 jira-tool create_task '{"project":"WTO","summary":"...","requirements":"...","scope":"...","acceptance_criteria":"..."}'
 jira-tool submit_verdict '{"issueIdOrKey":"<issue-key>","verdict":"PASS","summary":"done"}'
@@ -241,7 +241,7 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 ### 三者配合的典型 workflow
 
 ```text
-1. jira_search { jql: "project = SSSS AND status = 'In Progress'" }
+1. jira_search { jql: "project = <project-key> AND status = 'In Progress'" }
    → 拿到 N 个 ticket key (search 已经走默认 fields, 不付 comment 成本)
 
 2. 对每个 key:
