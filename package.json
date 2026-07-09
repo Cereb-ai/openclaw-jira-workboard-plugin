@@ -2,7 +2,21 @@
   "name": "@cereb/jira-openclaw-plugin",
   "version": "0.5.1",
   "type": "module",
-  "private": true,
+  "description": "OpenClaw native plugin for Jira Cloud REST API v3. 14 named tools via defineToolPlugin.",
+  "license": "MIT",
+  "author": {
+    "name": "Leo Wang",
+    "email": "wanglingsong@gmail.com",
+    "url": "https://github.com/LeoWangCereb"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cereb-ai/openclaw-jira-workboard-plugin.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Cereb-ai/openclaw-jira-workboard-plugin/issues"
+  },
+  "homepage": "https://github.com/Cereb-ai/openclaw-jira-workboard-plugin#readme",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
