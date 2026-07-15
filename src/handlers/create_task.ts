@@ -1,17 +1,15 @@
 /**
  * jira.create_task — POST /rest/api/3/issue (orchestrator template, 0.5.0+).
  *
- * requirements / scope / acceptance_criteria are all plain-text strings (NOT
- * ADF dict, NOT arrays). Plugin wraps them into a 3-section description:
+ * 3 plain-text string 字段，plugin 自动加 ## section heading:
+ *   requirements → ## 任务说明       (Why + What + ≤ 1-2 句非目标, ≤ 600 字)
+ *   scope        → ## 职责范围       (✅ 负责 / ❌ 不负责 bullets)
+ *   acceptance_criteria → ## 验收标准 (bullets，每条 AC 含断言+反断言)
  *
- *   ## 任务说明
- *   <requirements>
- *
- *   ## 职责范围
- *   <scope>             (按 label 写 ✅ 负责 / ❌ 不负责)
- *
- *   ## 验收标准
- *   <acceptanceCriteria>
+ * requirements 末尾用 `📖 参考 Runbook：[title §X](url)` 行挂关联资料
+ * （格式见 ~/.openclaw/skills/task-creator/SKILL.md "描述引用格式"）。
+ * 严禁 requirements 含: 工作流步骤 / scope 内容 / AC 内容 / 长背景 (>3 句) /
+ * 选型理由。详规则见 SKILL.md。
  *
  * `scope` is REQUIRED — 未传或空串 → 错误。scope 文本模板见
  * ~/.openclaw/skills/task-orchestrator/references/labels.md。
@@ -62,6 +60,21 @@ export async function createTask(
         "create_task requires `requirements` (plain text string, non-empty). " +
         "3 fields (requirements / scope / acceptance_criteria) are all plain " +
         "text strings — NOT ADF dict, NOT arrays. See skills/jira/SKILL.md.",
+    });
+  }
+  // requirements 字段粒度 sanity check — 防 caller 把整 ticket doc 塞进 requirements
+  if (requirements.length > 600) {
+    return textResult({
+      error: `requirements 字段长度 ${requirements.length} > 600。` +
+        `它是"任务说明"section,不是整个 ticket doc。` +
+        `长背景 / 选型理由 → wiki;scope/AC → 对应字段。` +
+        `Runbook 引用 → 📖 参考 Runbook：[title §X](url) 格式（详见 task-creator SKILL.md）。`,
+    });
+  }
+  if (/\*\*断言\*\*|AC\d+:|✅ 负责|❌ 不负责/.test(requirements)) {
+    return textResult({
+      error: `requirements 字段含疑似 AC 或 Scope 内容（"**断言**" / "AC1:" / "✅ 负责"）。` +
+        `这些应该分别放 acceptance_criteria / scope 字段,不是任务说明。`,
     });
   }
   const scope = args.scope;
