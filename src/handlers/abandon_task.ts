@@ -12,7 +12,8 @@
  *   2. POST /rest/api/3/issue/{key}/comment  (abandon reason)
  *   3. PUT  /rest/api/3/issue/{key}          fields: { assignee: null }
  *   4. GET  /rest/api/3/issue/{key}/transitions  → find "已完成"
- *   5. POST /rest/api/3/issue/{key}/transitions  → → "已完成"
+ *      POST /rest/api/3/issue/{key}/transitions  → → "已完成"
+ *   5. PUT  /rest/api/3/issue/{key}          update: { labels: [{ remove: "escalated" }] }
  *
  * Partial-failure reporting: each later step reports what was already
  * committed so the agent can manually finish what remains.
@@ -24,6 +25,7 @@ import { validateAdfContentNodes } from "./_adf.js";
 import type { ToolResult } from "../types.js";
 
 const TARGET_STATUS = "已完成";
+const DEFAULT_LABELS_TO_REMOVE = ["escalated"];
 
 interface AtlassianTransition {
   id: string;
@@ -52,6 +54,21 @@ export async function abandonTask(
     return textResult({
       error: "abandon_task requires `reason` (string, non-empty).",
     });
+  }
+  const labelsArg = args.labels;
+  let labelsToRemove: string[] = DEFAULT_LABELS_TO_REMOVE;
+  if (labelsArg !== undefined) {
+    if (
+      !Array.isArray(labelsArg) ||
+      !labelsArg.every(
+        (label) => typeof label === "string" && label.trim().length > 0,
+      )
+    ) {
+      return textResult({
+        error: "abandon_task `labels` must be an array of non-empty strings when provided.",
+      });
+    }
+    labelsToRemove = labelsArg as string[];
   }
 
   // Step 1: verify the issue is actually a subtask.
@@ -209,27 +226,10 @@ export async function abandonTask(
     });
   }
 
-  // Step 5: execute the transition.
+  // Step 4: execute the transition.
   try {
     await jiraPost(cfg, `issue/${issueIdOrKey}/transitions`, {
       transition: { id: match.id },
-    });
-    return textResult({
-      ok: true,
-      method: "abandon_task",
-      comment: { id: commentId, self: commentSelf },
-      assigneeCleared,
-      transition: {
-        id: match.id,
-        name: match.name,
-        to: match.to?.name,
-      },
-      summary: {
-        key: issueIdOrKey,
-        commentId,
-        assigneeCleared: true,
-        transitionedTo: match.to?.name,
-      },
     });
   } catch (err) {
     const msg = err instanceof JiraHttpError ? err.message : errorMessage(err);
@@ -240,10 +240,51 @@ export async function abandonTask(
       comment: { id: commentId, self: commentSelf },
       assigneeCleared,
       error:
-        `jira.abandon_task (step 5: execute transition) failed: ${msg}. ` +
+        `jira.abandon_task (step 4: execute transition) failed: ${msg}. ` +
         `Comment already posted; assignee ${assigneeCleared ? "cleared" : "NOT cleared"}.`,
     });
   }
+
+  let labelsRemoved = true;
+  let labelsRemoveError: string | undefined;
+  if (labelsToRemove.length > 0) {
+    try {
+      // Per AGENTS.md T9 + SSSS-765 incident 2026-07-20 02:18 — escalated label must be cleared on abandon to prevent dispatch loop label accumulation
+      await jiraPut(cfg, `issue/${issueIdOrKey}`, {
+        update: {
+          labels: labelsToRemove.map((label) => ({ remove: label })),
+        },
+      });
+    } catch (err) {
+      labelsRemoved = false;
+      labelsRemoveError = err instanceof JiraHttpError
+        ? err.message
+        : errorMessage(err);
+    }
+  }
+
+  return textResult({
+    ok: true,
+    method: "abandon_task",
+    comment: { id: commentId, self: commentSelf },
+    assigneeCleared,
+    labelsRemoved,
+    labelsRemoveError,
+    transition: {
+      id: match.id,
+      name: match.name,
+      to: match.to?.name,
+    },
+    summary: {
+      key: issueIdOrKey,
+      commentId,
+      assigneeCleared: true,
+      transitionedTo: match.to?.name,
+      labelsRemoved,
+      labels: labelsToRemove,
+      labelsRemoveError,
+    },
+  });
 }
 
 function errorMessage(err: unknown): string {
