@@ -264,10 +264,16 @@ export default defineToolPlugin({
       name: "jira_abandon_task",
       label: "Jira Abandon Task",
       description:
-        "Abandon a subtask (re-planning). 评论 + 清 assignee + 转「已完成」. Subtask-only (main task → submit_verdict).",
+        "Abandon a subtask (re-planning). 评论 + 清 assignee + 转「已完成」+ 清 escalated label by default. Subtask-only (main task → submit_verdict).",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Subtask issue key" }),
         reason: Type.String({ description: "Why abandoning" }),
+        labels: Type.Optional(
+          Type.Array(Type.String(), {
+            description:
+              "Labels to remove after transition succeeds. Defaults to ['escalated'].",
+          }),
+        ),
       }),
       async execute(params, config) {
         applyConfig(config);
