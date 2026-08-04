@@ -41,7 +41,7 @@ export default defineToolPlugin({
   id: "jira-openclaw-plugin",
   name: "Jira",
   description:
-    "Jira Cloud REST v3 native tools (11 methods, each is a named tool). Generic: jira_search / jira_get / jira_list_comments / jira_get_comment / jira_comment / jira_transition. Orchestrator: jira_create_task / jira_create_subtask / jira_submit_verdict / jira_abandon_task / jira_request_help. Reads ATST_TOKEN / JIRA_CLOUD_ID / JIRA_PROXY from env. See skills/jira/SKILL.md for per-tool guidance.",
+    "Jira Cloud REST v3 native tools (14 methods, each is a named tool): jira_search / jira_get / jira_list_comments / jira_get_comment / jira_comment / jira_list_attachments / jira_get_attachment / jira_upload_attachment / jira_transition / jira_create_task / jira_create_subtask / jira_submit_verdict / jira_abandon_task / jira_request_help. Two invocation paths: native OpenClaw agents call these MCP tools directly; non-native agents (e.g. codex) use the jira-tool binary with the SAME method names (jira_* or short aliases) — see skills/jira/SKILL.md. Reads ATST_TOKEN / JIRA_CLOUD_ID / JIRA_PROXY from env.",
   configSchema: Type.Object({
     atstToken: Type.Optional(
       Type.String({ description: "(optional) Override ATST_TOKEN env var" }),
