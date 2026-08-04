@@ -13,24 +13,33 @@ metadata:
 
 ---
 
-## 调用形态
+## 调用形态（两种 agent，方法名 100% 对齐）
 
-**OpenClaw 原生 tool** (agent 默认) — 直接调 named tool:
+**路径 A — OpenClaw 原生 agent（含 cereb-pilot 等）**：直接调 named MCP 工具，无需包装：
 
 ```json
 jira_search { jql: "project = <project-key> AND status != Done" }
 jira_get { issueIdOrKey: "<issue-key>" }
 jira_create_task { project: "WTO", summary: "...", requirements: "...", scope: "...", acceptance_criteria: "..." }
+jira_upload_attachment { issueIdOrKey: "<issue-key>", filePath: "/path/to/x.png" }
 ```
 
-**CLI 二进制** (OpenCode / 终端 / CI):
+**路径 B — 非 OpenClaw 原生 agent（codex 等，无 MCP 工具暴露）**：用 `jira-tool` 二进制。**方法名与 MCP 100% 对齐**——`jira_*` 全名和短名（search/get/comment/...）都接受，参数与 MCP 工具完全一致：
 
 ```bash
+jira-tool jira_search '{"jql":"project = <project-key> AND status != Done"}'
+jira-tool jira_get '{"issueIdOrKey":"<issue-key>"}'
+jira-tool jira_create_task '{"project":"WTO","summary":"...","requirements":"...","scope":"...","acceptance_criteria":"..."}'
+jira-tool jira_submit_verdict '{"issueIdOrKey":"<issue-key>","verdict":"PASS","summary":"done"}'
+jira-tool jira_upload_attachment '{"issueIdOrKey":"<issue-key>","filePath":"/path/to/x.png"}'
+# 短名同样可用（向后兼容）：
 jira-tool search '{"jql":"project = <project-key> AND status != Done"}'
 jira-tool get '{"issueIdOrKey":"<issue-key>"}'
-jira-tool create_task '{"project":"WTO","summary":"...","requirements":"...","scope":"...","acceptance_criteria":"..."}'
-jira-tool submit_verdict '{"issueIdOrKey":"<issue-key>","verdict":"PASS","summary":"done"}'
+# --help 打印方法列表
+jira-tool --help
 ```
+
+> ⚠️ **方法名必须用 MCP 名（`jira_*`）或短名**，两者都能直接调用。不要拼 `jira-tool jira` 之类的名字（无此方法）。CLI 只有 14 个方法，与 MCP 工具一一对应。
 
 命令退出码: `0`=成功, `5`=业务错误, `2`=JSON 解析错, `1`=无参数.
 
@@ -430,11 +439,11 @@ ADF 是 Atlassian 的富文本 JSON 格式. **agent 永远不需要直接构造 
 
 ---
 
-## Python Helper 模板 (ADF 构造, 用于 `jira_comment.body`)
+## Python Helper 模板 (ADF 构造, 仅供开发者参考)
 
-> **用途**: 程序化构造 ADF (例如把 markdown 转 ADF、`jira_comment` 的 body). 保证 (a) `doc.content` 永远是数组 (b) `listItem` 自动包 `paragraph` (c) 不会出现 `content` 是 string/object 的情况.
+> **⚠️ 警告**: `jira_comment` 的 `body` 现为 **plain string**（plugin 自动转 ADF），`jira_create_task` / `jira_create_subtask` 的 3 字段也是纯文本字符串。**agent-facing 参数一律不收 ADF dict**——本节 ADF 构造仅用于开发者调试 / 内部富文本逻辑参考，不要把它传给 `jira-tool comment` / `jira_comment` 等任何 agent-facing 工具。
 >
-> **`jira_create_task` / `jira_create_subtask` 不再用这套** — 3 字段 (`requirements` / `scope` / `acceptance_criteria`) 已是纯文本字符串, 不需要构造 ADF.
+> 本节保证 (a) `doc.content` 永远是数组 (b) `listItem` 自动包 `paragraph` (c) 不会出现 `content` 是 string/object 的情况.
 
 ### 1. 节点构造函数 (Node Builders)
 
@@ -522,31 +531,20 @@ def collect_mentions(adf: dict[str, Any]) -> dict[str, str]:
     return mentions
 ```
 
-### 3. 完整使用示例 (建子任务评论)
+### 3. 完整使用示例 (给 ticket 写评论)
 
 ```python
-# 场景: 给 <issue-key> 加一段 Phase 总结评论
-body = doc(
-    heading(2, "Phase 完成总结"),
-    paragraph(text("P1 修 Save 持久化 "), text("已完成"), text(" (5/5 tests pass)")),
-    heading(3, "变更文件"),
-    bullet_list(
-        "src/services/save.py: 改用事务包装",
-        "src/db/migrations/0042_add_index.sql: 新增索引",
-    ),
-    code_block("diff", "- save()\n+ with db.transaction(): save()"),
-    panel("info", paragraph(text("已合入 main, 待 review"))),
-)
+# 场景: 给 <issue-key> 加一段 Phase 总结评论（body 是 plain string，\n 换行）
+body = "Phase 完成总结\n\n- P1 修 Save 持久化 已完成 (5/5 tests pass)\n- 已合入 main, 待 review"
 
-mention_map = collect_mentions(body)
-# → 调用 jira_comment (CLI 形式)
+# → 调用 jira_comment (CLI 形式，方法名用 MCP 名或短名均可)
 import json, subprocess
 subprocess.run([
-    "jira-tool", "comment",
+    "jira-tool", "jira_comment",
     json.dumps({
         "issueIdOrKey": "<issue-key>",
         "body": body,
-        "mentionMap": mention_map,
+        "mentionAccountIds": ["<accountId>"],
     }, ensure_ascii=False),
 ], check=True)
 ```
@@ -689,7 +687,7 @@ assert not problems, problems  # OK 才发
 
 ## 避坑清单
 
-1. **`comment.body` 必 ADF dict**: `{version:1, type:"doc", content:[{type:"paragraph", content:[{type:"text", text:"..."}]}]}`. 字符串 body 不支持. **ADF 不会写时看上面"ADF Builder Guide"**.
+1. **`jira_comment.body` 是纯文本 string，不是 ADF dict**: plugin 自动转 ADF（`\n` → hardBreak）。不要传 ADF dict（会被拒，报 `comment body must be a plain string`）。
 2. **`create_task` / `create_subtask` 的 `requirements` / `scope` / `acceptance_criteria` 全是纯文本字符串**: 不是 ADF dict, 不是数组. plugin 内部拼 3 段 ADF. `acceptance_criteria` 用 `\n` 分隔多条 AC.
 3. **`submit_verdict.verdict` 必为 `PASS` 或 `FAIL`**: 其他值 → fail-fast. reason 必填 (FAIL 时).
 4. **`request_help` 仅主任务**: 子任务请用 `submit_verdict({verdict:"FAIL", reason})`. (会返清晰错误并指明替代方案)

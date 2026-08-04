@@ -2,7 +2,7 @@
 /**
  * jira-tool — CLI wrapper for the @cereb/jira-openclaw-plugin.
  *
- * Allows the 11 plugin methods to be invoked from any shell / terminal,
+ * Allows all 14 plugin methods to be invoked from any shell / terminal,
  * independently of OpenClaw / OpenCode / Wecom DM. Useful for:
  *
  *   - Debugging from a PC terminal without the full OpenClaw round-trip.
@@ -13,23 +13,29 @@
  * there is no separate API client. Reads env (ATST_TOKEN / JIRA_CLOUD_ID /
  * JIRA_PROXY) the same way as the OpenClaw entry point, so no new config.
  *
+ * Method names are 100% aligned with the OpenClaw MCP tools: both the
+ * MCP names (jira_search / jira_get / ...) and the short names
+ * (search / get / ...) are accepted.
+ *
  * Usage:
  *   jira-tool <method> '<args-json>'
  *
  * Examples:
- *   jira-tool search '{"jql":"project = WTO AND status != Done","maxResults":1}'
- *   jira-tool get '{"issueIdOrKey":"WTO-71"}'
- *   jira-tool get '{"issueIdOrKey":"WTO-71","concise":true}'
- *   jira-tool list_comments '{"issueIdOrKey":"WTO-71","maxResults":10}'
- *   jira-tool get_comment '{"issueIdOrKey":"WTO-71","commentId":"10001"}'
- *   jira-tool create_task '{"project":"WTO","summary":"...","requirements":"...","scope":"...","acceptance_criteria":["..."]}'
- *   jira-tool create_subtask '{"project":"WTO","parent":"WTO-100","summary":"...","requirements":"...","scope":"...","acceptance_criteria":["..."],"labels":["code"]}'
- *   jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"done"}'
- *   jira-tool submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"FAIL","summary":"blocked","reason":"waiting on X"}'
- *   jira-tool abandon_task '{"issueIdOrKey":"WTO-101","reason":"re-planning"}'
- *   jira-tool request_help '{"issueIdOrKey":"WTO-50","question":"need clarification"}'
- *   jira-tool comment '{"issueIdOrKey":"WTO-100","body":{"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"..."}]}]}}'
- *   jira-tool transition '{"issueIdOrKey":"WTO-100","targetStatus":"Done"}'
+ *   jira-tool jira_search '{"jql":"project = WTO AND status != Done","maxResults":1}'
+ *   jira-tool jira_get '{"issueIdOrKey":"WTO-71"}'
+ *   jira-tool jira_list_comments '{"issueIdOrKey":"WTO-71","maxResults":10}'
+ *   jira-tool jira_get_comment '{"issueIdOrKey":"WTO-71","commentId":"10001"}'
+ *   jira-tool jira_comment '{"issueIdOrKey":"WTO-100","body":"plain text"}'
+ *   jira-tool jira_list_attachments '{"issueIdOrKey":"WTO-100"}'
+ *   jira-tool jira_get_attachment '{"attachmentId":"10001"}'
+ *   jira-tool jira_upload_attachment '{"issueIdOrKey":"WTO-100","filePath":"/tmp/x.png"}'
+ *   jira-tool jira_create_task '{"project":"WTO","summary":"...","requirements":"...","scope":"...","acceptance_criteria":["..."]}'
+ *   jira-tool jira_create_subtask '{"project":"WTO","parent":"WTO-100","summary":"...","requirements":"...","scope":"...","acceptance_criteria":["..."],"labels":["code"]}'
+ *   jira-tool jira_submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"done"}'
+ *   jira-tool jira_submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"FAIL","summary":"blocked","reason":"waiting on X"}'
+ *   jira-tool jira_abandon_task '{"issueIdOrKey":"WTO-101","reason":"re-planning"}'
+ *   jira-tool jira_request_help '{"issueIdOrKey":"WTO-50","question":"need clarification"}'
+ *   jira-tool jira_transition '{"issueIdOrKey":"WTO-100","targetStatus":"Done"}'
  *
  * Output: JSON to stdout on success; non-zero exit + JSON error on stderr on failure.
  */
@@ -38,6 +44,9 @@ import { get } from "./handlers/get.js";
 import { comment } from "./handlers/comment.js";
 import { listComments } from "./handlers/list_comments.js";
 import { getComment } from "./handlers/get_comment.js";
+import { listAttachments } from "./handlers/list_attachments.js";
+import { getAttachment } from "./handlers/get_attachment.js";
+import { uploadAttachment } from "./handlers/upload_attachment.js";
 import { createTask } from "./handlers/create_task.js";
 import { createSubtask } from "./handlers/create_subtask.js";
 import { submitVerdict } from "./handlers/submit_verdict.js";
@@ -52,12 +61,33 @@ const HANDLERS: Record<string, (args: Record<string, unknown>) => Promise<ToolRe
   list_comments: listComments,
   get_comment: getComment,
   comment: comment,
+  list_attachments: listAttachments,
+  get_attachment: getAttachment,
+  upload_attachment: uploadAttachment,
   create_task: createTask,
   create_subtask: createSubtask,
   submit_verdict: submitVerdict,
   abandon_task: abandonTask,
   request_help: requestHelp,
   transition: transition,
+};
+
+// 100% parity with the OpenClaw native MCP tool names (jira_*).
+const MCP_ALIASES: Record<string, string> = {
+  jira_search: "search",
+  jira_get: "get",
+  jira_list_comments: "list_comments",
+  jira_get_comment: "get_comment",
+  jira_comment: "comment",
+  jira_list_attachments: "list_attachments",
+  jira_get_attachment: "get_attachment",
+  jira_upload_attachment: "upload_attachment",
+  jira_create_task: "create_task",
+  jira_create_subtask: "create_subtask",
+  jira_submit_verdict: "submit_verdict",
+  jira_abandon_task: "abandon_task",
+  jira_request_help: "request_help",
+  jira_transition: "transition",
 };
 
 function printUsage(): void {
@@ -84,8 +114,17 @@ async function main(): Promise<void> {
     printUsage();
     process.exit(1);
   }
-  const method = argv[0];
+  const methodArg = argv[0];
+  if (methodArg === "--help" || methodArg === "-h") {
+    printUsage();
+    process.exit(0);
+  }
+  const method = MCP_ALIASES[methodArg] ?? methodArg;
   const argsStr = argv.slice(1).join(" ");
+  if (argsStr === "--help" || argsStr === "-h") {
+    printUsage();
+    process.exit(0);
+  }
   const handler = HANDLERS[method];
   if (!handler) {
     console.error(
