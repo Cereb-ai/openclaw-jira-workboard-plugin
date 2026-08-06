@@ -18,11 +18,19 @@
  * JIRA_DEFAULT_ASSIGNEE_ACCOUNT_ID env). Missing → assignee field skipped
  * (issue stays unassigned). labels default to `["plan"]`. issuetype is
  * always "Task" — for subtasks, use create_subtask.
+ *
+ * Optional `block` parameter (0.5.2+) establishes Blocks links on creation,
+ * mirroring create_subtask's contract:
+ *   block.blocks: string[] — new main task blocks these tickets
+ *   block.blockedBy: string[] — these tickets block the new main task
+ * Both directions are optional and independent. Block failures are reported
+ * but do not rollback the created task.
  */
 import { loadConfig } from "../auth.js";
 import { jiraPost, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
 import { buildTaskDescription } from "./_adf.js";
+import { block } from "./block.js";
 import type { ToolResult } from "../types.js";
 
 const DEFAULT_LABELS = ["plan"];
@@ -131,19 +139,70 @@ export async function createTask(
     fields.assignee = { accountId: cfg.defaultAssigneeAccountId };
   }
 
+  // --- optional block relationships (0.5.2+) ---
+  let blockErrors: string[] = [];
+  let blockPlan: Array<{ direction: string; keys: string[] }> = [];
+  const blockParam = args.block as Record<string, unknown> | undefined;
+  if (blockParam && typeof blockParam === "object") {
+    const blocks = blockParam.blocks;
+    const blockedBy = blockParam.blockedBy;
+    if (Array.isArray(blocks) && blocks.length > 0) {
+      blockPlan.push({ direction: "blocks", keys: blocks as string[] });
+    }
+    if (Array.isArray(blockedBy) && blockedBy.length > 0) {
+      blockPlan.push({ direction: "blockedBy", keys: blockedBy as string[] });
+    }
+  }
+
   try {
     const data = (await jiraPost(cfg, "issue", { fields })) as {
       id?: string;
       key?: string;
       self?: string;
     };
-    return textResult({
+    const newKey = data.key;
+
+    // establish block relationships (mirror create_subtask.ts:155-182)
+    if (newKey && blockParam && typeof blockParam === "object") {
+      const blocks = blockParam.blocks;
+      const blockedBy = blockParam.blockedBy;
+
+      if (Array.isArray(blocks)) {
+        for (const target of blocks) {
+          if (typeof target === "string" && target.trim().length > 0) {
+            const r = await block({ blocker: newKey, blocked: target });
+            const d = r.details as Record<string, unknown> | undefined;
+            if (d && !d.ok) {
+              blockErrors.push(`blocks ${target}: ${d.error ?? JSON.stringify(d)}`);
+            }
+          }
+        }
+      }
+      if (Array.isArray(blockedBy)) {
+        for (const target of blockedBy) {
+          if (typeof target === "string" && target.trim().length > 0) {
+            const r = await block({ blocker: target, blocked: newKey });
+            const d = r.details as Record<string, unknown> | undefined;
+            if (d && !d.ok) {
+              blockErrors.push(`blockedBy ${target}: ${d.error ?? JSON.stringify(d)}`);
+            }
+          }
+        }
+      }
+    }
+
+    const result: Record<string, unknown> = {
       ok: true,
       method: "create_task",
       request: { fields },
       issue: { id: data.id, key: data.key, self: data.self },
       summary: { key: data.key, id: data.id, url: data.self },
-    });
+      block: blockPlan.length > 0 ? blockPlan : undefined,
+    };
+    if (blockErrors.length > 0) {
+      result.block_errors = blockErrors;
+    }
+    return textResult(result);
   } catch (err) {
     if (err instanceof JiraHttpError) {
       return textResult({ error: `jira.create_task failed: ${err.message}` });

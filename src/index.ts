@@ -169,7 +169,7 @@ export default defineToolPlugin({
       name: "jira_create_task",
       label: "Jira Create Task",
       description:
-        "Create a main task. Locks template + plan label + assignee. requirements / scope / acceptance_criteria are 3 plain-text strings (NOT ADF dict, NOT arrays) — plugin wraps them into the 3-section description template. scope (按 labels.md 写 ✅/❌ 负责) 必填.",
+        "Create a main task. Locks template + plan label + assignee + optional block. requirements / scope / acceptance_criteria are 3 plain-text strings (NOT ADF dict, NOT arrays) — plugin wraps them into the 3-section description template. scope (按 labels.md 写 ✅/❌ 负责) 必填.",
       parameters: Type.Object({
         project: Type.String({ description: "Project key, e.g. 'WTO'" }),
         summary: Type.String({ description: "Task summary" }),
@@ -189,6 +189,15 @@ export default defineToolPlugin({
           Type.Array(Type.String(), {
             description: "Additional labels (plan label is auto-added)",
           }),
+        ),
+        block: Type.Optional(
+          Type.Object(
+            {
+              blockedBy: Type.Optional(Type.Array(Type.String())),
+              blocks: Type.Optional(Type.Array(Type.String())),
+            },
+            { description: "Optional dependency links" },
+          ),
         ),
       }),
       async execute(params, config) {
