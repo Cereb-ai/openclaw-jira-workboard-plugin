@@ -7,7 +7,10 @@
  *   https://developer.atlassian.com/changelog/#CHANGE-2046
  * The token's OAuth scope is sufficient (verified end-to-end 2026-06-10).
  *
- * Default fields: ["summary","status","issuetype","labels","created","issuelinks","parent"]
+ * Default fields (CP-2384 0.5.2+, issuelinks dropped — search callers usually
+ * only need summary/status/issuetype/labels/created/parent for triage; if
+ * they want issuelinks, fetch per-ticket via jira_get):
+ *   ["summary","status","issuetype","labels","created","parent"]
  * Default maxResults: 30.
  *
  * Out: a text-formatted table for human/LLM use, plus the raw JSON in `details.issues`
@@ -24,7 +27,6 @@ const DEFAULT_FIELDS = [
   "issuetype",
   "labels",
   "created",
-  "issuelinks",
   "parent",
 ];
 
@@ -61,7 +63,9 @@ export async function search(args: Record<string, unknown>): Promise<ToolResult>
     return textResult({
       ok: true,
       method: "search",
-      request: { jql, maxResults, fields },
+      // CP-2384 AC2: echo only key-class JQL — agents don't need the
+      // echoed fields list / maxResults back (they just sent them).
+      request: { jql },
       total: data?.total ?? issues.length,
       count: issues.length,
       issues: formatIssues(issues),

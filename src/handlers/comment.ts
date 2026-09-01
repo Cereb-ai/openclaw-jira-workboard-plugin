@@ -65,7 +65,15 @@ export async function comment(
     return textResult({
       ok: true,
       method: "comment",
-      request: { issueIdOrKey, body, mentions: mentionAccountIds },
+      // CP-2384 AC2: strip request.body echo (the full body the agent just
+      // sent) — comments already echoed back to the writer. Keep only the
+      // key-class identifier. mentionAccountIds stays here because it IS
+      // key-class info (account IDs, not user content).
+      request: {
+        issueIdOrKey,
+        mentions: mentionAccountIds,
+        bodyChars: body.length,
+      },
       comment: {
         id: data.id,
         self: data.self,

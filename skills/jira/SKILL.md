@@ -270,6 +270,158 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 
 ---
 
+## 返回字段契约 (CP-2384, 0.5.2+)
+
+5 个高频工具 (jira_get / jira_list_comments / jira_comment / jira_search / jira_create_subtask) 的返回字段做了统一裁剪: **agent 自己传入的请求参数不回显** (key 类标识除外), **产物标识 / 错误原因完整保留**, 反结果反馈 (block 状态) 字段不动. 下表是逐字段契约, 与实现 `src/handlers/*.ts` 逐字段一致.
+
+> **裁剪原则**: 请求回声 (agent 刚发的请求参数原样回显) 视为回声噪声, 裁掉; key 类标识 (issueIdOrKey / jql / parent / accountId 等) 是 agent 标识后续 ticket 的锚, 保留; 服务端产物标识 (issue.key/id/self、comment.id/self/created) 是 agent 后续 follow-up 的依据, 保留; 错误原因 (HTTP status + message) 必须完整保留, 禁止静默.
+
+### `jira_get` 返回契约
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `ok` | `true` | 成功标记 |
+| `method` | `"get"` | 方法名 |
+| `request.issueIdOrKey` | `string` | 唯一保留的请求回声 |
+| `issue.key` | `string` | ticket key (e.g. `CP-2384`) |
+| `issue.id` | `string` | Atlassian 内部 id |
+| `issue.summary` | `string` | ticket 标题 |
+| `issue.status` | `string` | 状态名 |
+| `issue.issuetype` | `string` | 类型名 |
+| `issue.priority` | `string?` | 优先级 |
+| `issue.labels` | `string[]` | 标签 |
+| `issue.assignee` | `string \| null` | assignee 显示名 (displayName) |
+| `issue.reporter` | `string \| null` | reporter 显示名 (displayName) |
+| `issue.created` | `string` | 创建时间 |
+| `issue.updated` | `string` | 最近更新时间 |
+| `issue.parent` | `{key, summary} \| null` | 父 ticket 标识 (subtask 时有) |
+| `issue.issuelinks` | `{blocks, blockedBy}` | **CP-2384 新 shape**: 见下 |
+| `issue.description` | `ADF doc \| null` | ADF 描述 |
+| `issue.attachments[]` | `attachment[]` | 最近 20 个附件 metadata |
+| `issue.attachmentCount` | `number` | 总附件数 |
+| `issue.moreCount?` | `number` | 超出 20 cap 的剩余数 |
+| `issue.fields` | `object` | 原始 fields 字典 (callers 想 drill in 用 `fields:['*all']` 拿全量) |
+
+**`issue.issuelinks` 结构 (CP-2384 AC1)**:
+
+```json
+{
+  "blocks": [{ "key": "CP-100", "statusCategory": "In Progress" }],
+  "blockedBy": [{ "key": "CP-50", "statusCategory": "Done" }]
+}
+```
+
+- `blocks`: 本 ticket **堵住**的下游 ticket (即本 ticket 是 blocker). 原 API 用 `outwardIssue` 表示.
+- `blockedBy`: 堵住本 ticket 的上游 ticket. 原 API 用 `inwardIssue` 表示.
+- 每个 link 项: `{key, statusCategory}` 仅 2 字段 (≤50 字符 JSON/项). `statusCategory` 来自关联票 `status.statusCategory.name` ("To Do" / "In Progress" / "Done" — 平台级 taxonomy, **display name 随实例 locale 本地化**, 项目无关). Cereb Jira 中文 locale 实测返回 "待办" / "正在进行" / "完成"; 英文 locale 返回 "To Do" / "In Progress" / "Done". 调用方做状态过滤需按本实例实测值匹配, 不要硬编码英文名.
+- 关联类型不属于 "blocks" 的 (Duplicate / Relates / Clones 之类) **静默丢弃**; 要拿原 shape 调 `jira_get { fields: ['*all'] }` 然后读 `fields.issuelinks`.
+
+### `jira_list_comments` 返回契约
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `ok` | `true` | 成功标记 |
+| `method` | `"list_comments"` | 方法名 |
+| `request.issueIdOrKey` | `string` | 唯一保留的请求回声 |
+| `startAt` | `number` | 翻页 cursor |
+| `maxResults` | `number` | 实际生效的最大条数 (默认 20) |
+| `rawCount` | `number` | 客户端过滤前条数 |
+| `count` | `number` | 客户端过滤后条数 |
+| `comments[]` | `comment[]` | 见下 |
+| `summary.key` | `string` | ticket key |
+| `summary.total` | `number` | ticket 总评论数 |
+| `summary.count` | `number` | 同顶层 `count` |
+| `summary.orderBy` | `string` | `-created` / `created` |
+| `summary.since?` | `ISO date string` | since 过滤值 |
+| `summary.authorAccountId?` | `string` | author 过滤值 |
+
+**`comments[]` 每条结构**:
+
+| 字段 | 类型 |
+|---|---|
+| `id` | `string` |
+| `author` | `{displayName, accountId} \| null` |
+| `created` | `string` |
+| `updated` | `string` |
+| `body` | `string` (纯文本, **不是 ADF**) |
+| `mentions[]` | `{accountId, displayName}[]` (deduped) |
+
+**CP-2384 AC3 说明**: `total` / `count` / `orderBy` / `since` / `authorAccountId` 5 字段在 `summary` 里, **顶层不再重复** (旧 0.4.x 双写, 已去重). 默认 `maxResults=20` (旧 50→20, AC3).
+
+### `jira_comment` 返回契约
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `ok` | `true` | 成功标记 |
+| `method` | `"comment"` | 方法名 |
+| `request.issueIdOrKey` | `string` | 唯一保留的 key-class 请求回声 |
+| `request.mentions` | `string[]` | mentionAccountIds (key-class, 保留) |
+| `request.bodyChars` | `number` | 原 body 字符数 (不含正文) |
+| `comment.id` | `string` | 新建评论 id |
+| `comment.self` | `string` | 评论 REST URL |
+| `comment.created` | `string` | 评论创建时间 |
+| `summary.key` | `string` | ticket key |
+| `summary.commentId` | `string` | 同 `comment.id` |
+| `summary.url` | `string` | 同 `comment.self` |
+
+**CP-2384 反断言**: **不回显** body 原文 (`request.body` 字段不存在); 错误路径 (`error`) 完整保留 HTTP status / message. `bodyChars` 让 agent 自检长度但不回显原文.
+
+### `jira_search` 返回契约
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `ok` | `true` | 成功标记 |
+| `method` | `"search"` | 方法名 |
+| `request.jql` | `string` | 唯一保留的请求回声 |
+| `total` | `number` | JQL 命中总数 (Atlassian 端) |
+| `count` | `number` | 本次返回条数 |
+| `issues[]` | `issue[]` | 见下 |
+
+**`issues[]` 每条结构**:
+
+| 字段 | 类型 | 备注 |
+|---|---|---|
+| `key` | `string` | |
+| `id` | `string` | |
+| `summary` | `string` | |
+| `status` | `string` | 状态名 |
+| `issuetype` | `string` | |
+| `labels` | `string[]` | |
+| `created` | `string` | |
+| `parent` | `string?` | parent key (subtask 时) |
+
+**CP-2384 说明**: 默认 `fields` **去掉** `issuelinks` (search callers 一般只需要 triage 元数据, issuelinks 留给 `jira_get` 按需拉); caller 显式传 `fields: ["issuelinks"]` 仍可拿; 请求回声只留 `jql`, 砍 `maxResults` / `fields` 字段.
+
+### `jira_create_subtask` 返回契约
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `ok` | `true` | 成功标记 |
+| `method` | `"create_subtask"` | 方法名 |
+| `request.parent` | `string` | 父 ticket key |
+| `request.summary` | `string` | 本 subtask 标题 |
+| `request.labels` | `string[]` | 本 subtask labels |
+| `issue.id` | `string` | 新建 subtask 的 Atlassian id |
+| `issue.key` | `string` | 新建 subtask 的 key |
+| `issue.self` | `string` | 新建 subtask 的 REST URL |
+| `parent` | `string` | 父 ticket key |
+| `summary.key` | `string` | 新建 subtask key |
+| `summary.id` | `string` | 新建 subtask id |
+| `summary.url` | `string` | 新建 subtask self |
+| `summary.parent` | `string` | 父 ticket key |
+| `block?` | `[{direction, keys}]` | 0.3.1+ block 计划 (有传 `block` 时) |
+| `block_errors?` | `string[]` | 0.3.1+ block 失败列表 |
+
+**CP-2384 说明**: 请求回声从 `request: {fields: <full ADF>}` 砍到 `{parent, summary, labels}` 3 字段, requirements / scope / acceptance_criteria 全文不再回显. **block 反馈 (`block` / `block_errors`) 完整保留** — CP-2384 不裁结果反馈.
+
+### 反断言 (本次不动)
+
+- **低频工具返回结构未改**: verdict / transition / abandon / upload_attachment / get_comment / list_attachments / get_attachment / create_task / request_help / list_attachments 等.
+- **`fields` 全量仍可用**: 调 `jira_get { fields: ['*all'] }` 后, `parsed.issue.fields.issuelinks` 仍是原数组 (旧 `{id, type, inwardIssue, outwardIssue}` 形状); 想 follow-up 拿到原 shape 不影响.
+- **错误路径仍走 `error` 字段**: 5 个工具任何 4xx / 5xx / 网络错 都返回 `{error: "jira.<method> failed: ..."}`, **不**走 result feedback 路径.
+
+---
+
 ## ADF Builder Guide (Atlassian Document Format, plugin 内部)
 
 > **官方参考:** https://developer.atlassian.com/cloud/jira/platform/apis/document/structure
