@@ -1,7 +1,7 @@
 /**
  * jira.get — read single issue with metadata + ADF description.
  *
- * Context-saving design (0.4.1+):
+ * Context-saving design (0.4.1+, tightened in CP-2384):
  *
  * Default behavior excludes `comment` and `worklog` from the Atlassian
  * response. These are the two heaviest sub-resources on a long-lived
@@ -10,6 +10,11 @@
  * text and dedupes mentions); agents that want worklog should call a
  * future `jira_list_worklogs` (not yet shipped) or pass `fields: ['*all']`
  * here.
+ *
+ * CP-2384 (0.5.2+) additionally compacts the issuelinks surface
+ * (`{blocks:[{key,statusCategory}], blockedBy:[...]}`), strips the
+ * `request.fields` echo from the response envelope, and overall keeps
+ * the default payload in the ~10 KB range instead of 45-58 KB.
  *
  * `fields` (optional): whitelisted list of Jira field names to fetch
  * server-side. Empty array or omitted → use the default whitelist below.
@@ -26,12 +31,11 @@
  *
  * Default whitelist (everything the formatter surfaces, plus description):
  *   summary, status, issuetype, priority, labels, assignee, reporter,
- *   created, updated, parent, description
+ *   created, updated, parent, description, issuelinks, attachment
  *
  * Intentionally excluded from default:
  *   comment   → use jira_list_comments
  *   worklog   → not yet exposed as a tool
- *   attachment → not yet exposed as a tool
  *   customfield_* → opt-in per field
  *   workratio, aggregateprogress, timespent, etc. → noise
  */
@@ -52,7 +56,12 @@ import type { ToolResult } from "../types.js";
  *  Keep this list in sync with the SSSS-401 plan AC1 contract:
  *    summary, status, issuetype, priority, labels, assignee, reporter,
  *    created, updated, parent, description, issuelinks, attachment
- *  Adding or removing fields can break SSSS-404 AC2 reverse assertion. */
+ *  Adding or removing fields can break SSSS-404 AC2 reverse assertion.
+ *
+ *  CP-2384 (0.5.2+): the issuelinks FIELD is still fetched (and visible
+ *  in `fields.issuelinks` for callers that want the raw shape), but the
+ *  top-level `issue.issuelinks` response surface is the compacted
+ *  `{blocks, blockedBy}` form — see compactIssueLinks below. */
 const DEFAULT_FIELDS = [
   "summary",
   "status",
@@ -94,6 +103,63 @@ function compactAttachment(a: Record<string, unknown>): Record<string, unknown> 
   };
 }
 
+/**
+ * Compact the issuelinks array (CP-2384 AC1) — split into two flat lists
+ * keyed by relationship direction so the agent doesn't have to walk
+ * inwardIssue/outwardIssue unions.
+ *
+ *   blocks:     tickets THIS issue blocks (type has outward=blocks, target
+ *               is in outwardIssue).
+ *   blockedBy:  tickets blocking THIS issue (type has inward=is blocked by,
+ *               target is in inwardIssue).
+ *
+ * Per-link shape: `{key, statusCategory}` where statusCategory is the
+ * linked ticket's status.statusCategory.name ("To Do" / "In Progress" /
+ * "Done" — a Plat./standard taxonomy, not project-specific). Single link
+ * always ≤50 chars of payload.
+ *
+ * Link types we don't recognize as either blocks / blockedBy (rare
+ * "Duplicate", "Relates", "Clones" etc.) are dropped silently — the agent
+ * never needed them and they add noise. If callers do need them, the raw
+ * `fields.issuelinks` is still available via `jira_get { fields: ['*all'] }`.
+ */
+function compactIssueLinks(raw: unknown): {
+  blocks: Array<{ key: string; statusCategory: string }>;
+  blockedBy: Array<{ key: string; statusCategory: string }>;
+} {
+  const out = {
+    blocks: [] as Array<{ key: string; statusCategory: string }>,
+    blockedBy: [] as Array<{ key: string; statusCategory: string }>,
+  };
+  if (!Array.isArray(raw)) return out;
+  for (const item of raw) {
+    const link = item as {
+      type?: { inward?: string; outward?: string };
+      inwardIssue?: { key?: string; fields?: { status?: { statusCategory?: { name?: string } } } };
+      outwardIssue?: { key?: string; fields?: { status?: { statusCategory?: { name?: string } } } };
+    };
+    // outwardIssue present → this issue blocks that one
+    if (link.outwardIssue?.key) {
+      out.blocks.push({
+        key: String(link.outwardIssue.key),
+        statusCategory: String(
+          link.outwardIssue.fields?.status?.statusCategory?.name ?? "",
+        ),
+      });
+    }
+    // inwardIssue present → that one blocks this issue
+    if (link.inwardIssue?.key) {
+      out.blockedBy.push({
+        key: String(link.inwardIssue.key),
+        statusCategory: String(
+          link.inwardIssue.fields?.status?.statusCategory?.name ?? "",
+        ),
+      });
+    }
+  }
+  return out;
+}
+
 export async function get(args: Record<string, unknown>): Promise<ToolResult> {
   let cfg;
   try {
@@ -132,6 +198,13 @@ export async function get(args: Record<string, unknown>): Promise<ToolResult> {
       fields?: Record<string, unknown>;
     };
     const f = data.fields ?? {};
+
+    // Compact issuelinks (CP-2384 AC1): drop the raw inwardIssue/outwardIssue
+    // nested objects (which carry the full fields summary + Atlassian self
+    // URLs) and split into 2 flat lists. statusCategory is taken from the
+    // linked ticket's status.statusCategory.name. Each link stays under ~50
+    // chars. Used to be the 3rd-heaviest field on long-lived tickets.
+    const compactIssuelinks = compactIssueLinks(f.issuelinks);
     const status =
       typeof f.status === "object" && f.status !== null
         ? (f.status as { name?: string }).name
@@ -159,7 +232,7 @@ export async function get(args: Record<string, unknown>): Promise<ToolResult> {
 
     // Compact the attachment list: cap at 20 most-recent + strip avatarUrls.
     // The raw `attachment` field is still available under `fields.attachment`
-    // for callers that need the full list.
+    // for callers that need the full list. (CP-2384 didn't touch attachments.)
     const rawAtt = Array.isArray(f.attachment) ? (f.attachment as Record<string, unknown>[]) : [];
     const sortedAtt = [...rawAtt].sort((a, b) =>
       String(b.created ?? "").localeCompare(String(a.created ?? "")),
@@ -172,7 +245,10 @@ export async function get(args: Record<string, unknown>): Promise<ToolResult> {
     return textResult({
       ok: true,
       method: "get",
-      request: { issueIdOrKey, fields: query.fields },
+      // Echo only key-class identifiers — strip the full `fields` list
+      // (echo of the query string) which is redundant with the upstream
+      // call and bloats the response. CP-2384 AC2.
+      request: { issueIdOrKey },
       issue: {
         key: data.key,
         id: data.id,
@@ -188,10 +264,10 @@ export async function get(args: Record<string, unknown>): Promise<ToolResult> {
         parent: parent
           ? { key: parent.key, summary: parent.fields?.summary }
           : null,
-        // issuelinks: list of {id, type, inwardIssue|outwardIssue}. Surfaced
-        // as-is from the API. Cheap to pass through — it's a small array of
-        // {id, type.name, outwardIssue.key, ...} per link.
-        issuelinks: f.issuelinks ?? [],
+        // CP-2384 AC1: simplified issuelinks — flat {blocks, blockedBy}
+        // lists with just {key, statusCategory} per link (no raw
+        // inwardIssue/outwardIssue nested objects).
+        issuelinks: compactIssuelinks,
         description: f.description ?? null,
         // 20 most-recent attachments (sorted by created desc, avatarUrls
         // stripped). `attachmentCount` is the total; `moreCount` is set when

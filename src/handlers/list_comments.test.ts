@@ -88,7 +88,8 @@ describe("list_comments (SSSS-401)", () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.method).toBe("list_comments");
     expect(parsed.count).toBe(1);
-    expect(parsed.total).toBe(1);
+    // CP-2384 AC3: `total` lives under `summary` now (no top-level dup).
+    expect(parsed.summary.total).toBe(1);
     expect(parsed.comments).toHaveLength(1);
 
     const c = parsed.comments[0];
@@ -108,9 +109,10 @@ describe("list_comments (SSSS-401)", () => {
     expect(jiraGet).toHaveBeenCalledTimes(1);
     const callArgs = vi.mocked(jiraGet).mock.calls[0];
     expect(callArgs[1]).toBe("issue/TEST-1/comment");
+    // CP-2384 AC3: default maxResults dropped 50 → 20.
     expect(callArgs[2]).toEqual({
       startAt: 0,
-      maxResults: 50,
+      maxResults: 20,
       orderBy: "-created",
     });
   });
@@ -269,11 +271,12 @@ describe("list_comments (SSSS-401)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
 
     expect(parsed.ok).toBe(true);
-    expect(parsed.total).toBe(3);
+    expect(parsed.summary.total).toBe(3);
     expect(parsed.rawCount).toBe(3);
     expect(parsed.count).toBe(2);
     expect(parsed.comments.map((c: { id: string }) => c.id)).toEqual(["2", "3"]);
-    expect(parsed.request.since).toBe("2026-06-15T00:00:00.000Z");
+    // CP-2384 AC2/AC3: `since` moved from request echo → summary.
+    expect(parsed.summary.since).toBe("2026-06-15T00:00:00.000Z");
   });
 
   it("AC-404-LC-14: since filter boundary — empty raw comments / since in the future", async () => {
@@ -405,8 +408,11 @@ describe("list_comments (SSSS-401)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.ok).toBe(true);
     expect(parsed.count).toBe(1);
-    expect(parsed.request.since).toBeUndefined();
-    expect(parsed.request.authorAccountId).toBeUndefined();
+    // CP-2384 AC3: request echo stripped to {issueIdOrKey}; since /
+    // authorAccountId live in summary, undefined when not passed.
+    expect(parsed.request).toEqual({ issueIdOrKey: "TEST-1" });
+    expect(parsed.summary.since).toBeUndefined();
+    expect(parsed.summary.authorAccountId).toBeUndefined();
   });
 
   it("AC-404-LC-17: invalid since string returns soft error (no jiraGet call)", async () => {
@@ -417,6 +423,55 @@ describe("list_comments (SSSS-401)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.error).toMatch(/since.*not a valid ISO date/);
     expect(jiraGet).not.toHaveBeenCalled();
+  });
+
+  // ---- CP-2384 AC3 (default 20 + top-level/summary dedup) ----
+
+  it("AC-2384-LC-18: without maxResults, the upstream Atlassian query uses default 20", async () => {
+    vi.mocked(jiraGet).mockResolvedValueOnce({ comments: [] });
+
+    await listComments({ issueIdOrKey: "TEST-1" });
+
+    const callArgs = vi.mocked(jiraGet).mock.calls[0];
+    expect(callArgs[2]).toMatchObject({ maxResults: 20 });
+  });
+
+  it("AC-2384-LC-19: top-level envelope no longer duplicates summary fields (CP-2384 AC3 dedup)", async () => {
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      total: 5,
+      startAt: 0,
+      maxResults: 20,
+      comments: [
+        {
+          id: "1",
+          author: { displayName: "Alice", accountId: "acc-1" },
+          created: "2026-06-15T10:00:00.000+0800",
+          body: SAMPLE_ADF,
+        },
+      ],
+    });
+
+    const result = await listComments({
+      issueIdOrKey: "TEST-1",
+      orderBy: "created",
+      since: "2026-06-01",
+      authorAccountId: "acc-1",
+    });
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    // CP-2384 AC3 reverse-assertion: total / orderBy / since /
+    // authorAccountId live ONLY in `summary` now (not at top-level).
+    expect(parsed).not.toHaveProperty("total");
+    expect(parsed).not.toHaveProperty("orderBy");
+    expect(parsed).not.toHaveProperty("since");
+    expect(parsed).not.toHaveProperty("authorAccountId");
+    // They DO exist under summary, exactly once.
+    expect(parsed.summary.total).toBe(5);
+    expect(parsed.summary.orderBy).toBe("created");
+    expect(parsed.summary.since).toBe("2026-06-01T00:00:00.000Z");
+    expect(parsed.summary.authorAccountId).toBe("acc-1");
+    // request echo is just {issueIdOrKey}.
+    expect(parsed.request).toEqual({ issueIdOrKey: "TEST-1" });
   });
 });
 

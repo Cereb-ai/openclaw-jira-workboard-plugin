@@ -184,7 +184,11 @@ export async function createSubtask(
     const result: Record<string, unknown> = {
       ok: true,
       method: "create_subtask",
-      request: { fields },
+      // CP-2384 AC2: strip the `request.fields` echo — it carried the full
+      // ADF description (requirements / scope / acceptance_criteria rendered
+      // by buildTaskDescription), which is just the agent's own input
+      // bounced back. Keep the key-class identifiers only.
+      request: { parent, summary, labels: cleanLabels },
       issue: { id: data.id, key: data.key, self: data.self },
       parent,
       summary: { key: data.key, id: data.id, url: data.self, parent },

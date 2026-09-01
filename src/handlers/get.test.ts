@@ -3,18 +3,21 @@
  *
  * Coverage:
  *   - Default behavior: `fields` query param uses DEFAULT_FIELDS whitelist
- *     (excludes `comment`/`worklog` to save context; includes 12 fields
- *     per SSSS-401 AC1 / SSSS-404 AC2).
+ *     (excludes `comment`/`worklog` to save context; includes 13 fields
+ *     per SSSS-401 AC1 / SSSS-404 AC2 / CP-2384).
  *   - Empty `fields: []` → same default whitelist.
  *   - `fields: ['*all']` → no `fields` query param at all (full payload).
  *   - `fields: ['customfield_10019']` → passes through verbatim.
  *   - 404 upstream surfaces as error envelope.
- *   - SSSS-404 R2: DEFAULT_FIELDS has exactly 12 items including issuelinks.
+ *   - SSSS-404 R2: DEFAULT_FIELDS has exactly 13 items including issuelinks.
+ *   - CP-2384 AC1: top-level `issue.issuelinks` is compact `{blocks,
+ *     blockedBy}` (each item {key, statusCategory}), NOT the raw array
+ *     with nested inwardIssue/outwardIssue objects.
  *
- * The formatter itself is unchanged — we still surface summary/status/
- * issuetype/priority/labels/assignee/reporter/created/updated/parent/
- * description/issuelinks + the full fields dict (back-compat). The
- * savings happen upstream at the Atlassian query string.
+ * The formatter itself is unchanged for everything except `issuelinks`
+ * (CP-2384 split it into 2 direction-keyed lists to drop the nested
+ * object weight). The savings happen upstream at the Atlassian query
+ * string.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -181,7 +184,7 @@ describe("get default fields whitelist (SSSS-401)", () => {
     expect(fieldsList).toContain("parent");
   });
 
-  it("AC-404-G-8: response surfaces issuelinks array verbatim", async () => {
+  it("AC-404-G-8: response surfaces issuelinks as the compact {blocks, blockedBy} shape (CP-2384 AC1)", async () => {
     const issueWithLinks = {
       ...SAMPLE_ISSUE,
       fields: {
@@ -190,7 +193,24 @@ describe("get default fields whitelist (SSSS-401)", () => {
           {
             id: "10001",
             type: { name: "blocks", inward: "is blocked by", outward: "blocks" },
-            outwardIssue: { key: "TEST-2", fields: { summary: "downstream" } },
+            outwardIssue: {
+              key: "TEST-2",
+              fields: {
+                summary: "downstream",
+                status: { statusCategory: { name: "In Progress" } },
+              },
+            },
+          },
+          {
+            id: "10002",
+            type: { name: "blocks", inward: "is blocked by", outward: "blocks" },
+            inwardIssue: {
+              key: "TEST-3",
+              fields: {
+                summary: "upstream",
+                status: { statusCategory: { name: "Done" } },
+              },
+            },
           },
         ],
       },
@@ -199,7 +219,86 @@ describe("get default fields whitelist (SSSS-401)", () => {
 
     const result = await get({ issueIdOrKey: "TEST-1" });
     const parsed = JSON.parse(result.content[0].text as string);
-    expect(parsed.issue.issuelinks).toHaveLength(1);
-    expect(parsed.issue.issuelinks[0].outwardIssue.key).toBe("TEST-2");
+
+    const links = parsed.issue.issuelinks;
+    // CP-2384 AC1: top-level issuelinks is the compact object, NOT a flat array.
+    expect(Array.isArray(links)).toBe(false);
+    expect(links).toHaveProperty("blocks");
+    expect(links).toHaveProperty("blockedBy");
+    // outwardIssue → blocks list
+    expect(links.blocks).toHaveLength(1);
+    expect(links.blocks[0]).toEqual({
+      key: "TEST-2",
+      statusCategory: "In Progress",
+    });
+    // inwardIssue → blockedBy list
+    expect(links.blockedBy).toHaveLength(1);
+    expect(links.blockedBy[0]).toEqual({
+      key: "TEST-3",
+      statusCategory: "Done",
+    });
+    // No raw inwardIssue/outwardIssue keys in the surface.
+    for (const item of [...links.blocks, ...links.blockedBy]) {
+      expect(item).not.toHaveProperty("outwardIssue");
+      expect(item).not.toHaveProperty("inwardIssue");
+    }
+    // AC reverse: raw arrays still available under fields.issuelinks (callers
+    // that pass fields:['*all'] and want the raw shape can drill in there).
+    expect(parsed.issue.fields.issuelinks).toHaveLength(2);
+  });
+
+  // ---- CP-2384 AC1 (≤50 chars per link) + AC2 (request echo strip) ----
+
+  it("AC-2384-G-9: every compact issuelinks entry serializes to ≤50 chars", async () => {
+    // Realistic Jira keys (PROJECT-NN format, max ~12 chars). 20 links.
+    const links = Array.from({ length: 20 }, (_, i) => ({
+      id: String(10000 + i),
+      type: { name: "blocks", inward: "is blocked by", outward: "blocks" },
+      outwardIssue: {
+        key: `LINK-${String(i).padStart(4, "0")}`,
+        fields: {
+          status: { statusCategory: { name: "In Progress" } },
+        },
+      },
+    }));
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      ...SAMPLE_ISSUE,
+      fields: { ...SAMPLE_ISSUE.fields, issuelinks: links },
+    });
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+    expect(parsed.issue.issuelinks.blocks).toHaveLength(20);
+    // CP-2384 contract: each link JSON ≤ 50 chars (we strip the raw
+    // inward/outward nested objects to keep the line tiny).
+    for (const item of parsed.issue.issuelinks.blocks) {
+      expect(JSON.stringify(item).length).toBeLessThanOrEqual(50);
+    }
+  });
+
+  it("AC-2384-G-10: request echo is reduced to {issueIdOrKey} only (CP-2384 AC2)", async () => {
+    vi.mocked(jiraGet).mockResolvedValueOnce(SAMPLE_ISSUE);
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    expect(parsed.request).toBeDefined();
+    expect(parsed.request.issueIdOrKey).toBe("TEST-1");
+    // CP-2384 dropped `fields` from request echo (it was just the query
+    // string we sent upstream — redundant).
+    expect(parsed.request).not.toHaveProperty("fields");
+  });
+
+  it("AC-2384-G-11: error path retains the HTTP error envelope (CP-2384 反断言)", async () => {
+    const { JiraHttpError } = await import("../http.js");
+    vi.mocked(jiraGet).mockRejectedValueOnce(
+      new JiraHttpError(403, "Forbidden", "no perms"),
+    );
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+    expect(parsed.error).toMatch(/jira\.get failed/);
+    expect(parsed.error).toMatch(/HTTP 403/);
+    expect(parsed.error).toMatch(/Forbidden/);
   });
 });

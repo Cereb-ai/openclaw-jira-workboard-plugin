@@ -32,7 +32,7 @@ import { textResult } from "../dispatch.js";
 import { adfToPlainText } from "./_adf.js";
 import type { ToolResult } from "../types.js";
 
-const DEFAULT_MAX_RESULTS = 50;
+const DEFAULT_MAX_RESULTS = 20;
 const ALLOWED_ORDER_BY = new Set(["created", "-created"]);
 
 export async function listComments(
@@ -69,8 +69,11 @@ export async function listComments(
     startAt = args.startAt;
   }
 
-  // maxResults: optional, default 50. Cap at 100 — beyond that Atlassian
-  // returns paginated anyway and the LLM will burn context for no gain.
+  // maxResults: optional, default 20 (CP-2384 AC3 — was 50 in 0.4.x, dropped
+  // to 20 because tickets with > 20 comments are rare and the most-recent 20
+  // cover ~all agent scenarios; use `startAt` to paginate beyond).
+  // Cap at 100 — beyond that Atlassian returns paginated anyway and the LLM
+  // will burn context for no gain.
   let maxResults = DEFAULT_MAX_RESULTS;
   if (args.maxResults !== undefined && args.maxResults !== null) {
     if (
@@ -80,7 +83,7 @@ export async function listComments(
     ) {
       return textResult({
         error:
-          "list_comments `maxResults` must be a positive integer (default 50, max 100).",
+          "list_comments `maxResults` must be a positive integer (default 20, max 100).",
       });
     }
     if (args.maxResults > 100) {
@@ -179,17 +182,16 @@ export async function listComments(
     return textResult({
       ok: true,
       method: "list_comments",
-      request: {
-        issueIdOrKey,
-        startAt,
-        maxResults,
-        orderBy,
-        since: sinceMs !== null ? new Date(sinceMs).toISOString() : undefined,
-        authorAccountId: authorAccountId ?? undefined,
-      },
-      total: data?.total ?? comments.length,
+      // Echo only key-class identifiers (CP-2384 AC2). Numeric / filter
+      // parameters live in `summary` — no double-storing them.
+      request: { issueIdOrKey },
+      // Pagination cursors at the top (cheap, stable).
       startAt: data?.startAt ?? startAt,
       maxResults: data?.maxResults ?? maxResults,
+      // rawCount = pre-filter count, count = post-filter count. CP-2384
+      // moved `total / orderBy / since / authorAccountId` out of the top
+      // level (they duplicated the same fields in `summary`); only the
+      // counts survive here.
       rawCount: formatted.length,
       count: comments.length,
       comments,
