@@ -313,7 +313,7 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 
 - `blocks`: 本 ticket **堵住**的下游 ticket (即本 ticket 是 blocker). 原 API 用 `outwardIssue` 表示.
 - `blockedBy`: 堵住本 ticket 的上游 ticket. 原 API 用 `inwardIssue` 表示.
-- 每个 link 项: `{key, statusCategory}` 仅 2 字段 (≤50 字符 JSON/项). `statusCategory` 来自关联票 `status.statusCategory.name` ("To Do" / "In Progress" / "Done"), 平台级标准, 项目无关.
+- 每个 link 项: `{key, statusCategory}` 仅 2 字段 (≤50 字符 JSON/项). `statusCategory` 来自关联票 `status.statusCategory.name` ("To Do" / "In Progress" / "Done" — 平台级 taxonomy, **display name 随实例 locale 本地化**, 项目无关). Cereb Jira 中文 locale 实测返回 "待办" / "正在进行" / "完成"; 英文 locale 返回 "To Do" / "In Progress" / "Done". 调用方做状态过滤需按本实例实测值匹配, 不要硬编码英文名.
 - 关联类型不属于 "blocks" 的 (Duplicate / Relates / Clones 之类) **静默丢弃**; 要拿原 shape 调 `jira_get { fields: ['*all'] }` 然后读 `fields.issuelinks`.
 
 ### `jira_list_comments` 返回契约

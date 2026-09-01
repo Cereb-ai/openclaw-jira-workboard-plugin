@@ -13,6 +13,11 @@
  *   - CP-2384 AC1: top-level `issue.issuelinks` is compact `{blocks,
  *     blockedBy}` (each item {key, statusCategory}), NOT the raw array
  *     with nested inwardIssue/outwardIssue objects.
+ *   - CP-2391 AC1: non-blocks link types (Relates / Duplicate / Clones)
+ *     are filtered out by `link.type.name === "Blocks"` guard before
+ *     classification, so they cannot leak into either blocks or blockedBy
+ *     (regression for the CP-2385 FAIL where Jira populated both
+ *     inwardIssue + outwardIssue on bidirectional links).
  *
  * The formatter itself is unchanged for everything except `issuelinks`
  * (CP-2384 split it into 2 direction-keyed lists to drop the nested
@@ -287,6 +292,147 @@ describe("get default fields whitelist (SSSS-401)", () => {
     // CP-2384 dropped `fields` from request echo (it was just the query
     // string we sent upstream — redundant).
     expect(parsed.request).not.toHaveProperty("fields");
+  });
+
+  it("AC-2391-G-12: non-blocks links (Relates / Duplicate / Clones) are dropped, not duplicated (CP-2391 AC1)", async () => {
+    // Reproduces the Jira Cloud shape that triggered CP-2385 FAIL: a
+    // bidirectional Relates / Duplicate link populates BOTH inwardIssue
+    // and outwardIssue. Before CP-2391, the formatter pushed that link
+    // into both `blocks` AND `blockedBy`, polluting the dependency
+    // topology that downstream orchestrators consume.
+    const issueWithMixedLinks = {
+      ...SAMPLE_ISSUE,
+      fields: {
+        ...SAMPLE_ISSUE.fields,
+        issuelinks: [
+          // Real Blocks link — should land in `blockedBy` (TEST-3 blocks us).
+          {
+            id: "20001",
+            type: { name: "blocks", inward: "is blocked by", outward: "blocks" },
+            inwardIssue: {
+              key: "TEST-3",
+              fields: {
+                status: { statusCategory: { name: "Done" } },
+              },
+            },
+          },
+          // Jira-bidirectional Relates link with BOTH sides populated.
+          // CP-2391: this must NOT appear in either list.
+          {
+            id: "20002",
+            type: { name: "Relates", inward: "relates to", outward: "relates to" },
+            inwardIssue: {
+              key: "TEST-9",
+              fields: {
+                status: { statusCategory: { name: "In Progress" } },
+              },
+            },
+            outwardIssue: {
+              key: "TEST-10",
+              fields: {
+                status: { statusCategory: { name: "To Do" } },
+              },
+            },
+          },
+          // Jira-bidirectional Duplicate link with BOTH sides populated.
+          // CP-2391: this must NOT appear in either list.
+          {
+            id: "20003",
+            type: { name: "Duplicate", inward: "is duplicated by", outward: "duplicates" },
+            inwardIssue: {
+              key: "TEST-11",
+              fields: {
+                status: { statusCategory: { name: "Done" } },
+              },
+            },
+            outwardIssue: {
+              key: "TEST-12",
+              fields: {
+                status: { statusCategory: { name: "Done" } },
+              },
+            },
+          },
+          // Clones link — also a non-blocks type.
+          {
+            id: "20004",
+            type: { name: "Clones", inward: "is cloned by", outward: "clones" },
+            outwardIssue: {
+              key: "TEST-13",
+              fields: {
+                status: { statusCategory: { name: "In Progress" } },
+              },
+            },
+          },
+        ],
+      },
+    };
+    vi.mocked(jiraGet).mockResolvedValueOnce(issueWithMixedLinks);
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+    const links = parsed.issue.issuelinks;
+
+    // Only the one real Blocks link should survive — neither Relates,
+    // nor Duplicate, nor Clones should appear in either list.
+    expect(links.blocks).toEqual([]);
+    expect(links.blockedBy).toHaveLength(1);
+    expect(links.blockedBy[0].key).toBe("TEST-3");
+
+    // Cross-check: none of the discarded keys appears anywhere in the
+    // compact surface (regardless of which list).
+    const allKeys = [
+      ...links.blocks.map((b: { key: string }) => b.key),
+      ...links.blockedBy.map((b: { key: string }) => b.key),
+    ];
+    expect(allKeys).not.toContain("TEST-9");
+    expect(allKeys).not.toContain("TEST-10");
+    expect(allKeys).not.toContain("TEST-11");
+    expect(allKeys).not.toContain("TEST-12");
+    expect(allKeys).not.toContain("TEST-13");
+
+    // Raw array is preserved under fields.issuelinks so callers that want
+    // the unfiltered shape can still see the Relates / Duplicate links.
+    expect(parsed.issue.fields.issuelinks).toHaveLength(4);
+  });
+
+  it("AC-2391-G-13: blocks link with BOTH inwardIssue and outwardIssue populated is kept exactly once (CP-2391 regression)", async () => {
+    // Defensive: when a Blocks-type link itself happens to carry both
+    // sides (Jira allows this), the formatter must keep both directions
+    // distinctly (one in blocks, one in blockedBy) — not silently drop it.
+    const issueWithBidirBlocks = {
+      ...SAMPLE_ISSUE,
+      fields: {
+        ...SAMPLE_ISSUE.fields,
+        issuelinks: [
+          {
+            id: "30001",
+            type: { name: "Blocks", inward: "is blocked by", outward: "blocks" },
+            outwardIssue: {
+              key: "TEST-20",
+              fields: {
+                status: { statusCategory: { name: "In Progress" } },
+              },
+            },
+            inwardIssue: {
+              key: "TEST-21",
+              fields: {
+                status: { statusCategory: { name: "To Do" } },
+              },
+            },
+          },
+        ],
+      },
+    };
+    vi.mocked(jiraGet).mockResolvedValueOnce(issueWithBidirBlocks);
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+    const links = parsed.issue.issuelinks;
+
+    expect(links.blocks).toHaveLength(1);
+    expect(links.blocks[0].key).toBe("TEST-20");
+    expect(links.blockedBy).toHaveLength(1);
+    expect(links.blockedBy[0].key).toBe("TEST-21");
   });
 
   it("AC-2384-G-11: error path retains the HTTP error envelope (CP-2384 反断言)", async () => {
