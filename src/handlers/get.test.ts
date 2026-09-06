@@ -1,5 +1,6 @@
 /**
- * get handler tests — server-side fields whitelist (SSSS-401, SSSS-404 R2).
+ * get handler tests — server-side fields whitelist (SSSS-401, SSSS-404 R2;
+ * CP-2384; CP-2669 G2 description→plain text + G6 details summary).
  *
  * Coverage:
  *   - Default behavior: `fields` query param uses DEFAULT_FIELDS whitelist
@@ -18,11 +19,11 @@
  *     classification, so they cannot leak into either blocks or blockedBy
  *     (regression for the CP-2385 FAIL where Jira populated both
  *     inwardIssue + outwardIssue on bidirectional links).
- *
- * The formatter itself is unchanged for everything except `issuelinks`
- * (CP-2384 split it into 2 direction-keyed lists to drop the nested
- * object weight). The savings happen upstream at the Atlassian query
- * string.
+ *   - CP-2669 G2: `issue.description` is plain text (adfToPlainText),
+ *     NOT the raw ADF doc. null description → null. Empty ADF → "".
+ *   - CP-2669 G6: `ToolResult.details` is a <100-char one-line summary
+ *     string ("成功获取 <key>: <summary>, N 附件"), NOT the full
+ *     structured object.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -144,7 +145,7 @@ describe("get default fields whitelist (SSSS-401)", () => {
     expect(query.fields).toBe("customfield_10019");
   });
 
-  it("AC-401-G-5: response shape unchanged (curated keys + description + fields dict)", async () => {
+  it("AC-401-G-5: response shape (curated keys + description + fields dict)", async () => {
     vi.mocked(jiraGet).mockResolvedValueOnce(SAMPLE_ISSUE);
 
     const result = await get({ issueIdOrKey: "TEST-1" });
@@ -171,7 +172,7 @@ describe("get default fields whitelist (SSSS-401)", () => {
     expect(parsed.error).toMatch(/HTTP 404/);
   });
 
-  it("AC-404-G-7: DEFAULT_FIELDS has exactly 12 items including issuelinks (SSSS-404 R2)", async () => {
+  it("AC-404-G-7: DEFAULT_FIELDS has exactly 13 items including issuelinks (SSSS-404 R2)", async () => {
     vi.mocked(jiraGet).mockResolvedValueOnce(SAMPLE_ISSUE);
 
     await get({ issueIdOrKey: "TEST-1" });
@@ -446,5 +447,150 @@ describe("get default fields whitelist (SSSS-401)", () => {
     expect(parsed.error).toMatch(/jira\.get failed/);
     expect(parsed.error).toMatch(/HTTP 403/);
     expect(parsed.error).toMatch(/Forbidden/);
+    // CP-2669 G6: error path has a slim details summary, not the
+    // full envelope.
+    expect(typeof result.details).toBe("string");
+    expect((result.details as string).length).toBeLessThan(100);
+  });
+
+  // ---- CP-2669 G2: description is plain text (not ADF doc) ----
+
+  it("AC-2669-G-14: issue.description is plain text (adfToPlainText), NOT ADF doc", async () => {
+    vi.mocked(jiraGet).mockResolvedValueOnce(SAMPLE_ISSUE);
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    // Description is a plain string, not a doc object.
+    expect(typeof parsed.issue.description).toBe("string");
+    expect(parsed.issue.description).toBe("A description.");
+    // The ADF `version` / `type` keys are gone from the top-level surface.
+    expect(parsed.issue.description).not.toHaveProperty("version");
+    expect(parsed.issue.description).not.toHaveProperty("type");
+    expect(parsed.issue.description).not.toHaveProperty("content");
+    // The raw ADF is still reachable under fields.description for callers
+    // that need it (default whitelist already pulls the field server-side).
+    expect(parsed.issue.fields.description).toHaveProperty("version");
+    expect(parsed.issue.fields.description).toHaveProperty("type");
+    expect(parsed.issue.fields.description).toHaveProperty("content");
+  });
+
+  it("AC-2669-G-15: null / missing description renders as null (no throw, no ADF default)", async () => {
+    const issueNoDescription = {
+      ...SAMPLE_ISSUE,
+      fields: { ...SAMPLE_ISSUE.fields, description: null },
+    };
+    vi.mocked(jiraGet).mockResolvedValueOnce(issueNoDescription);
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    expect(parsed.issue.description).toBeNull();
+    // No error path; ok flag stays true.
+    expect(parsed.ok).toBe(true);
+  });
+
+  it("AC-2669-G-16: description with multiple ADF blocks renders as plain text with block separators", async () => {
+    const issueMultiBlock = {
+      ...SAMPLE_ISSUE,
+      fields: {
+        ...SAMPLE_ISSUE.fields,
+        description: {
+          version: 1,
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "First paragraph." }],
+            },
+            {
+              type: "bulletList",
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "bullet a" }],
+                    },
+                  ],
+                },
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "bullet b" }],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+    vi.mocked(jiraGet).mockResolvedValueOnce(issueMultiBlock);
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    expect(typeof parsed.issue.description).toBe("string");
+    expect(parsed.issue.description as string).toContain("First paragraph.");
+    expect(parsed.issue.description as string).toContain("- bullet a");
+    expect(parsed.issue.description as string).toContain("- bullet b");
+  });
+
+  // ---- CP-2669 G6: details is a short summary, not the full object ----
+
+  it("AC-2669-G-17: details is a <100-char one-line summary, NOT the full structured object", async () => {
+    vi.mocked(jiraGet).mockResolvedValueOnce(SAMPLE_ISSUE);
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+
+    expect(typeof result.details).toBe("string");
+    const summary = result.details as string;
+    expect(summary.length).toBeLessThan(100);
+    // Must mention the ticket key + summary.
+    expect(summary).toContain("TEST-1");
+    expect(summary).toContain("Test ticket");
+    // Must NOT contain the full structured payload keys (otherwise
+    // we're back to the pre-CP-2669 details=content duplication).
+    expect(summary).not.toContain("issuelinks");
+    expect(summary).not.toContain("attachmentCount");
+    expect(summary).not.toContain("\"ok\"");
+    // Full payload is still in content[0].text.
+    expect(result.content[0].text as string).toContain("issuelinks");
+  });
+
+  it("AC-2669-G-18: details mentions attachment count when attachments > 0", async () => {
+    const issueWithAtts = {
+      ...SAMPLE_ISSUE,
+      fields: {
+        ...SAMPLE_ISSUE.fields,
+        attachment: [
+          { id: "1", self: "u/1", filename: "a.png", size: 100, mimeType: "image/png", created: "2026-06-15T10:00:00.000+0800", content: "u/1/content", author: { displayName: "Bob", accountId: "acc-2" } },
+          { id: "2", self: "u/2", filename: "b.png", size: 200, mimeType: "image/png", created: "2026-06-14T10:00:00.000+0800", content: "u/2/content", author: { displayName: "Bob", accountId: "acc-2" } },
+        ],
+      },
+    };
+    vi.mocked(jiraGet).mockResolvedValueOnce(issueWithAtts);
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+    const summary = result.details as string;
+    expect(summary).toMatch(/2 附件/);
+    expect(summary.length).toBeLessThan(100);
+  });
+
+  it("AC-2669-G-19: details omits the attachment segment when 0 attachments", async () => {
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      ...SAMPLE_ISSUE,
+      fields: { ...SAMPLE_ISSUE.fields, attachment: [] },
+    });
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+    const summary = result.details as string;
+    expect(summary).not.toMatch(/附件/);
+    expect(summary.length).toBeLessThan(100);
   });
 });

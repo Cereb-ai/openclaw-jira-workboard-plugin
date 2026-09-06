@@ -77,7 +77,7 @@ export default defineToolPlugin({
       name: "jira_get",
       label: "Jira Get",
       description:
-        "Read single ticket details by key (e.g. 'WTO-100'). Default fetches only a whitelisted set of 12 fields (summary/status/issuetype/priority/labels/assignee/reporter/created/updated/parent/description/issuelinks) — this excludes the heavy `comment` and `worklog` sub-resources (5-50 KB per call). Pass `fields: ['*all']` for the full payload, or a specific list like `['customfield_10019']` to scope to one field. Comments should be fetched separately via jira_list_comments.",
+        "Read single ticket details by key (e.g. 'WTO-100'). Default fetches only a whitelisted set of 13 fields (summary/status/issuetype/priority/labels/assignee/reporter/created/updated/parent/description/issuelinks/attachment) — this excludes the heavy `comment` and `worklog` sub-resources (5-50 KB per call). Pass `fields: ['*all']` for the full payload, or a specific list like `['customfield_10019']` to scope to one field. Comments should be fetched separately via jira_list_comments. CP-2669: `issue.description` is plain text (not ADF); raw ADF stays accessible under `issue.fields.description`. `details` on the result is a <100-char one-line summary.",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Issue key like 'WTO-100'" }),
         fields: Type.Optional(
@@ -96,7 +96,7 @@ export default defineToolPlugin({
       name: "jira_list_comments",
       label: "Jira List Comments",
       description:
-        "List comments on a ticket. Comment bodies are rendered to plain text (no ADF). Optional startAt / maxResults (default 50, max 100) / orderBy ('created' | '-created', default '-created') / since (ISO date, client-side filter on created>=since) / authorAccountId (client-side filter on author.accountId).",
+        "List comments on a ticket. Comment bodies are rendered to plain text (no ADF); bodies longer than 500 chars are truncated with a tail marker pointing at jira_get_comment. Default maxResults=10, max 100. Returns {ok, method, request{issueIdOrKey}, total, returned, comments, [nextStartAt]}. nextStartAt is present only when more comments remain — pass it as the next startAt to paginate. Optional startAt / maxResults / orderBy ('created' | '-created', default '-created') / since (ISO date, client-side filter on created>=since) / authorAccountId (client-side filter on author.accountId).",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Issue key" }),
         startAt: Type.Optional(
@@ -104,7 +104,7 @@ export default defineToolPlugin({
         ),
         maxResults: Type.Optional(
           Type.Number({
-            description: "Max comments to return, default 50, max 100",
+            description: "Max comments to return, default 10, max 100",
           }),
         ),
         orderBy: Type.Optional(

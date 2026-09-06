@@ -202,14 +202,15 @@ jira_upload_attachment { issueIdOrKey: "<issue-key>", filePath: "/path/to/eviden
 jira_get { issueIdOrKey: "<issue-key>" }
 ```
 
-默认不带任何参数 → plugin **服务端** 走 `fields` query param 限定白名单:
+默认不带任何参数 → plugin **服务端** 走 `fields` query param 限定白名单 (0.5.0+ 13 个字段, 0.4.x 早期 12 个; 0.5.0 加 `attachment`):
 
 ```
 summary, status, issuetype, priority, labels,
-assignee, reporter, created, updated, parent, description
+assignee, reporter, created, updated, parent, description,
+issuelinks, attachment
 ```
 
-白名单**排除** `comment` / `worklog` / `attachment` 等重资源. 实测对比 `*navigable` 默认集, 一个 long-lived ticket 可以从 30+ KB 砍到 1-3 KB.
+白名单**排除** `comment` / `worklog` 等重资源 (`attachment` 已加, 默认 cap 20 条). 实测对比 `*navigable` 默认集, 一个 long-lived ticket 可以从 30+ KB 砍到 1-3 KB.
 
 **为什么走服务端 query 而不是 client-side filter**: Atlassian wire payload 在我们 formatter 跑之前就开始烧 token 了, 客户端裁剪救不了 wire cost. 唯一靠谱的省点是 `fields` query param.
 
@@ -220,22 +221,23 @@ jira_get { issueIdOrKey: "<issue-key>", fields: ["customfield_10019"] }     // �
 jira_get { issueIdOrKey: "<issue-key>", fields: ["summary","status","customfield_10019"] }  // 混搭
 ```
 
-返回结构不变: `issue.summary` / `issue.status` / `issue.description` / `issue.fields` (curated fields dict, **不含** comment/worklog).
+返回结构不变: `issue.summary` / `issue.status` / `issue.description` (CP-2669 G2: 纯文本, 不是 ADF) / `issue.fields` (curated fields dict, **不含** comment/worklog, 含原始 ADF `description` 字段供需要 raw 的 caller 用).
 
 ### `jira_list_comments`
 
 ```json
-jira_list_comments { issueIdOrKey: "<issue-key>", maxResults: 20, orderBy: "-created" }
+jira_list_comments { issueIdOrKey: "<issue-key>", maxResults: 10, orderBy: "-created" }
 jira_list_comments { issueIdOrKey: "<issue-key>", since: "2026-06-15T00:00:00.000+0800", authorAccountId: "712020:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx..." }
 ```
 
-- 走 `GET /issue/{key}/comment`, 默认 `maxResults=50` 上限 100, `orderBy="-created"` (最新在前)
+- 走 `GET /issue/{key}/comment`, **CP-2669 G4** 默认 `maxResults=10` 上限 100, `orderBy="-created"` (最新在前)
 - **comment body 自动从 ADF 转纯文本** (heading 渲染成 `## xxx`, bulletList 渲染成 `- xxx`, mention 渲染成 `@displayName`)
+- **CP-2669 G3**: 单条 body 超过 500 字符会被截断 + 追加尾部标记 `…[正文已截断, 共 N 字符, 全文用 jira_get_comment {id} 获取]`. 全文用 `jira_get_comment` 单独取.
 - 每个 comment 带 `mentions: [{accountId, displayName}]` 列表 — 回答 "谁被 @ 了" 这个高频问题不需要回扫 ADF
-- `startAt` 用于翻页 (Atlassian 默认 50 一页)
+- **CP-2669 G5 翻页**: 响应里有 `nextStartAt` 时, 直接拿来当下次的 `startAt` (即 "最后一条偏移 + 1"). 没有 `nextStartAt` = 没有剩余, 翻到末页.
 - `since` (可选, ISO date string) — **客户端 filter**: 保留 `created >= since` 的评论. 留空 / 省略 → 不过滤, 不 throw. 非法 ISO string → 软错误. 例: `"2026-06-15"` 或 `"2026-06-15T10:00:00.000+0800"`.
 - `authorAccountId` (可选, string) — **客户端 filter**: 保留 `author.accountId` 匹配的评论. 留空 / 省略 → 不过滤, 不 throw. 例: `"712020:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"`.
-- `rawCount` 字段返回过滤前数量, `count` 返回过滤后数量, 方便 agent 评估过滤效果.
+- **CP-2669 G5**: `total` (总评论数) + `returned` (本次过滤后条数) 取代旧 `rawCount` / `count` / `summary{}`.
 
 ### `jira_get_comment`
 
@@ -270,11 +272,16 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 
 ---
 
-## 返回字段契约 (CP-2384, 0.5.2+)
+## 返回字段契约 (CP-2384, 0.5.2+; CP-2669, 0.6.0)
 
 5 个高频工具 (jira_get / jira_list_comments / jira_comment / jira_search / jira_create_subtask) 的返回字段做了统一裁剪: **agent 自己传入的请求参数不回显** (key 类标识除外), **产物标识 / 错误原因完整保留**, 反结果反馈 (block 状态) 字段不动. 下表是逐字段契约, 与实现 `src/handlers/*.ts` 逐字段一致.
 
 > **裁剪原则**: 请求回声 (agent 刚发的请求参数原样回显) 视为回声噪声, 裁掉; key 类标识 (issueIdOrKey / jql / parent / accountId 等) 是 agent 标识后续 ticket 的锚, 保留; 服务端产物标识 (issue.key/id/self、comment.id/self/created) 是 agent 后续 follow-up 的依据, 保留; 错误原因 (HTTP status + message) 必须完整保留, 禁止静默.
+>
+> **CP-2669 G1 附加**: `ToolResult.details` (放在 content 之外的那份) 改为 **<100 字符一句话语义摘要**, 不再默认回填全量 `data`. 两个试点工具 (jira_get / jira_list_comments) 显式传入摘要; 其余 12 个工具保持旧行为 (单参 textResult → details 默认 = content). 摘要样例:
+> - jira_get 成功: `"成功获取 CP-2667: 标题, N 附件"`
+> - jira_list_comments 成功: `"CP-2667 共 25 条评论, 本次返回 10 条 (→10 翻页)"`
+> - 错误: `"jira_get 失败: HTTP 404 Not Found"`
 
 ### `jira_get` 返回契约
 
@@ -296,7 +303,7 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 | `issue.updated` | `string` | 最近更新时间 |
 | `issue.parent` | `{key, summary} \| null` | 父 ticket 标识 (subtask 时有) |
 | `issue.issuelinks` | `{blocks, blockedBy}` | **CP-2384 新 shape**: 见下 |
-| `issue.description` | `ADF doc \| null` | ADF 描述 |
+| `issue.description` | `string \| null` | **CP-2669 G2**: 纯文本 (adfToPlainText), **不是 ADF doc**; 原始 ADF 仍可通过 `issue.fields.description` 读取 |
 | `issue.attachments[]` | `attachment[]` | 最近 20 个附件 metadata |
 | `issue.attachmentCount` | `number` | 总附件数 |
 | `issue.moreCount?` | `number` | 超出 20 cap 的剩余数 |
@@ -316,24 +323,23 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 - 每个 link 项: `{key, statusCategory}` 仅 2 字段 (≤50 字符 JSON/项). `statusCategory` 来自关联票 `status.statusCategory.name` ("To Do" / "In Progress" / "Done" — 平台级 taxonomy, **display name 随实例 locale 本地化**, 项目无关). Cereb Jira 中文 locale 实测返回 "待办" / "正在进行" / "完成"; 英文 locale 返回 "To Do" / "In Progress" / "Done". 调用方做状态过滤需按本实例实测值匹配, 不要硬编码英文名.
 - 关联类型不属于 "blocks" 的 (Duplicate / Relates / Clones 之类) **静默丢弃**; 要拿原 shape 调 `jira_get { fields: ['*all'] }` 然后读 `fields.issuelinks`.
 
-### `jira_list_comments` 返回契约
+**CP-2669 G6 details 摘要样例**: `"成功获取 CP-2667: [标题], 3 附件"` (附件数=0 时省略 "N 附件" 段).
+
+### `jira_list_comments` 返回契约 (CP-2669 G5 精简后)
 
 | 字段 | 类型 | 含义 |
 |---|---|---|
 | `ok` | `true` | 成功标记 |
 | `method` | `"list_comments"` | 方法名 |
 | `request.issueIdOrKey` | `string` | 唯一保留的请求回声 |
-| `startAt` | `number` | 翻页 cursor |
-| `maxResults` | `number` | 实际生效的最大条数 (默认 20) |
-| `rawCount` | `number` | 客户端过滤前条数 |
-| `count` | `number` | 客户端过滤后条数 |
+| `total` | `number` | ticket 总评论数 (Atlassian 上游字段) |
+| `returned` | `number` | 本次过滤后实际返回条数 (含 since / authorAccountId 客户端 filter) |
+| `nextStartAt?` | `number` | **CP-2669 G5**: 仅当仍有剩余评论时出现; 翻页 cursor = 上次最后一条偏移 + 1, 直接作为下一次 startAt 传入 |
 | `comments[]` | `comment[]` | 见下 |
-| `summary.key` | `string` | ticket key |
-| `summary.total` | `number` | ticket 总评论数 |
-| `summary.count` | `number` | 同顶层 `count` |
-| `summary.orderBy` | `string` | `-created` / `created` |
-| `summary.since?` | `ISO date string` | since 过滤值 |
-| `summary.authorAccountId?` | `string` | author 过滤值 |
+
+**字段精简 (CP-2669 G5)**:
+- ❌ 移除 `startAt` / `maxResults` / `rawCount` / `count` / 整个 `summary{}` 嵌套 (回声 / 重复计数 / 过滤参数 全部砍掉 — agent 已知道自己传了什么)
+- ✅ 仅留 `total` / `returned` 两个数字: `total` 让 LLM 判断 "票上还有多少我没看", `returned` 让 LLM 判断 "这次拿到几条". `nextStartAt` 翻页 cursor 出现条件: 仍有剩余 (`startAt + maxResults < total`)
 
 **`comments[]` 每条结构**:
 
@@ -343,10 +349,16 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 | `author` | `{displayName, accountId} \| null` |
 | `created` | `string` |
 | `updated` | `string` |
-| `body` | `string` (纯文本, **不是 ADF**) |
+| `body` | `string` (纯文本, **不是 ADF**; **CP-2669 G3**: > 500 字符截断 + 尾部 `…[正文已截断, 共 N 字符, 全文用 jira_get_comment {id} 获取]` 标记) |
 | `mentions[]` | `{accountId, displayName}[]` (deduped) |
 
-**CP-2384 AC3 说明**: `total` / `count` / `orderBy` / `since` / `authorAccountId` 5 字段在 `summary` 里, **顶层不再重复** (旧 0.4.x 双写, 已去重). 默认 `maxResults=20` (旧 50→20, AC3).
+**CP-2669 G3 body 截断说明**: 单条 comment body > 500 字符时, 截断到 500 字符 + 追加尾部标记 (N = 截断前字符数). 全文用 `jira_get_comment {issueIdOrKey} {commentId}` 单独取.
+
+**CP-2669 G4 默认值变更**: `maxResults` 默认 20 → **10** (旧 50 → 20 → 10). 上限仍 100.
+
+**CP-2669 G6 details 摘要样例**:
+- 有剩余: `"CP-2667 共 25 条评论, 本次返回 10 条 (→10 翻页)"`
+- 无剩余: `"CP-2667 共 8 条评论, 本次返回 8 条"`
 
 ### `jira_comment` 返回契约
 

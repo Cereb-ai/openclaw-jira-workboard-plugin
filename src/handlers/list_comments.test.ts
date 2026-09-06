@@ -1,5 +1,5 @@
 /**
- * list_comments handler tests (SSSS-401).
+ * list_comments handler tests (SSSS-401; CP-2384; CP-2669 G3-G6).
  *
  * Coverage:
  *   - Happy path: ADF body → plain text + mentions; correct URL query.
@@ -8,6 +8,17 @@
  *   - Auth/config failure path (returns error envelope, not throws).
  *   - Upstream HTTP failure path.
  *   - ADF body of unexpected shape (non-doc) does not throw — returns "".
+ *
+ *   CP-2384: client-side filter (since + authorAccountId) + AC3 dedup.
+ *
+ *   CP-2669 G3: per-comment body > 500 chars → truncated to 500 chars +
+ *               tail marker pointing at jira_get_comment {id}.
+ *   CP-2669 G4: default maxResults dropped 20 → 10.
+ *   CP-2669 G5: response shape slimmed to {ok, method, request{issueIdOrKey},
+ *               total, returned, comments, [nextStartAt]}. rawCount / count /
+ *               summary {} all gone. nextStartAt only when remaining.
+ *   CP-2669 G6: ToolResult.details is a <100-char one-line summary string,
+ *               NOT the full structured object.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -57,6 +68,16 @@ const SAMPLE_ADF = {
   ],
 };
 
+/** Build a comment whose body is exactly `bodyLen` chars of plain text. */
+function longBodyAdf(bodyLen: number): unknown {
+  const text = "x".repeat(bodyLen);
+  return {
+    version: 1,
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text: text }] }],
+  };
+}
+
 describe("list_comments (SSSS-401)", () => {
   beforeEach(() => {
     vi.mocked(jiraGet).mockReset();
@@ -70,7 +91,7 @@ describe("list_comments (SSSS-401)", () => {
     vi.mocked(jiraGet).mockResolvedValueOnce({
       total: 1,
       startAt: 0,
-      maxResults: 50,
+      maxResults: 10,
       comments: [
         {
           id: "10001",
@@ -87,9 +108,10 @@ describe("list_comments (SSSS-401)", () => {
 
     expect(parsed.ok).toBe(true);
     expect(parsed.method).toBe("list_comments");
-    expect(parsed.count).toBe(1);
-    // CP-2384 AC3: `total` lives under `summary` now (no top-level dup).
-    expect(parsed.summary.total).toBe(1);
+    // CP-2669 G5: total/returned are the only two count fields at the
+    // top level. rawCount / count / summary{} are gone.
+    expect(parsed.total).toBe(1);
+    expect(parsed.returned).toBe(1);
     expect(parsed.comments).toHaveLength(1);
 
     const c = parsed.comments[0];
@@ -99,6 +121,12 @@ describe("list_comments (SSSS-401)", () => {
     expect(c.mentions).toEqual([
       { accountId: "acc-1", displayName: "Alice" },
     ]);
+
+    // CP-2669 G6: details is a <100-char one-line summary string,
+    // not the full structured object.
+    expect(typeof result.details).toBe("string");
+    expect((result.details as string).length).toBeLessThan(100);
+    expect(result.details as string).toMatch(/TEST-1.*共.*1.*条评论.*本次返回 1 条/);
   });
 
   it("AC-401-LC-2: URL query uses startAt / maxResults / orderBy defaults", async () => {
@@ -109,10 +137,10 @@ describe("list_comments (SSSS-401)", () => {
     expect(jiraGet).toHaveBeenCalledTimes(1);
     const callArgs = vi.mocked(jiraGet).mock.calls[0];
     expect(callArgs[1]).toBe("issue/TEST-1/comment");
-    // CP-2384 AC3: default maxResults dropped 50 → 20.
+    // CP-2669 G4: default maxResults dropped 20 → 10.
     expect(callArgs[2]).toEqual({
       startAt: 0,
-      maxResults: 20,
+      maxResults: 10,
       orderBy: "-created",
     });
   });
@@ -182,11 +210,11 @@ describe("list_comments (SSSS-401)", () => {
     expect(jiraGet).not.toHaveBeenCalled();
   });
 
-  it("AC-401-LC-9: empty comments list", async () => {
+  it("AC-401-LC-9: empty comments list (total=0, returned=0, no nextStartAt)", async () => {
     vi.mocked(jiraGet).mockResolvedValueOnce({
       total: 0,
       startAt: 0,
-      maxResults: 50,
+      maxResults: 10,
       comments: [],
     });
 
@@ -194,8 +222,11 @@ describe("list_comments (SSSS-401)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
 
     expect(parsed.ok).toBe(true);
-    expect(parsed.count).toBe(0);
+    expect(parsed.total).toBe(0);
+    expect(parsed.returned).toBe(0);
     expect(parsed.comments).toEqual([]);
+    // CP-2669 G5: no nextStartAt when there's nothing to paginate.
+    expect(parsed).not.toHaveProperty("nextStartAt");
   });
 
   it("AC-401-LC-10: missing body field renders as empty text", async () => {
@@ -221,6 +252,9 @@ describe("list_comments (SSSS-401)", () => {
     const result = await listComments({ issueIdOrKey: "TEST-1" });
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.error).toMatch(/jira\.list_comments failed.*network down/);
+    // CP-2669 G6: error path also has slim details summary.
+    expect(typeof result.details).toBe("string");
+    expect((result.details as string).length).toBeLessThan(100);
   });
 
   // ---- SSSS-404 R1/R4: client-side filter (since + authorAccountId) ----
@@ -241,7 +275,7 @@ describe("list_comments (SSSS-401)", () => {
     vi.mocked(jiraGet).mockResolvedValueOnce({
       total: 3,
       startAt: 0,
-      maxResults: 50,
+      maxResults: 10,
       comments: [
         {
           id: "1",
@@ -271,12 +305,15 @@ describe("list_comments (SSSS-401)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
 
     expect(parsed.ok).toBe(true);
-    expect(parsed.summary.total).toBe(3);
-    expect(parsed.rawCount).toBe(3);
-    expect(parsed.count).toBe(2);
+    // CP-2669 G5: total is the upstream total (3); returned is
+    // post-filter (2). No rawCount / count / summary.
+    expect(parsed.total).toBe(3);
+    expect(parsed.returned).toBe(2);
     expect(parsed.comments.map((c: { id: string }) => c.id)).toEqual(["2", "3"]);
-    // CP-2384 AC2/AC3: `since` moved from request echo → summary.
-    expect(parsed.summary.since).toBe("2026-06-15T00:00:00.000Z");
+    // CP-2669 G5: since is no longer echoed anywhere (filter still
+    // applied, but the response is slim).
+    expect(parsed).not.toHaveProperty("since");
+    expect(parsed).not.toHaveProperty("summary");
   });
 
   it("AC-404-LC-14: since filter boundary — empty raw comments / since in the future", async () => {
@@ -291,8 +328,8 @@ describe("list_comments (SSSS-401)", () => {
     });
     let parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.ok).toBe(true);
-    expect(parsed.count).toBe(0);
-    expect(parsed.rawCount).toBe(0);
+    expect(parsed.total).toBe(0);
+    expect(parsed.returned).toBe(0);
     expect(parsed.comments).toEqual([]);
 
     // (b) since in the future → all comments filtered out
@@ -320,8 +357,8 @@ describe("list_comments (SSSS-401)", () => {
     });
     parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.ok).toBe(true);
-    expect(parsed.rawCount).toBe(2);
-    expect(parsed.count).toBe(0);
+    expect(parsed.total).toBe(2);
+    expect(parsed.returned).toBe(0);
     expect(parsed.comments).toEqual([]);
   });
 
@@ -356,7 +393,7 @@ describe("list_comments (SSSS-401)", () => {
       authorAccountId: "acc-1",
     });
     let parsed = JSON.parse(result.content[0].text as string);
-    expect(parsed.count).toBe(2);
+    expect(parsed.returned).toBe(2);
     expect(parsed.comments.map((c: { id: string }) => c.id)).toEqual(["1", "3"]);
     expect(
       parsed.comments.every(
@@ -382,8 +419,8 @@ describe("list_comments (SSSS-401)", () => {
       authorAccountId: "acc-1",
     });
     parsed = JSON.parse(result.content[0].text as string);
-    expect(parsed.count).toBe(0);
-    expect(parsed.rawCount).toBe(1);
+    expect(parsed.returned).toBe(0);
+    expect(parsed.total).toBe(1);
     expect(parsed.comments).toEqual([]);
   });
 
@@ -407,12 +444,12 @@ describe("list_comments (SSSS-401)", () => {
     });
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.ok).toBe(true);
-    expect(parsed.count).toBe(1);
-    // CP-2384 AC3: request echo stripped to {issueIdOrKey}; since /
-    // authorAccountId live in summary, undefined when not passed.
+    expect(parsed.returned).toBe(1);
+    // CP-2669 G5: only issueIdOrKey survives in the request echo.
     expect(parsed.request).toEqual({ issueIdOrKey: "TEST-1" });
-    expect(parsed.summary.since).toBeUndefined();
-    expect(parsed.summary.authorAccountId).toBeUndefined();
+    expect(parsed).not.toHaveProperty("since");
+    expect(parsed).not.toHaveProperty("authorAccountId");
+    expect(parsed).not.toHaveProperty("summary");
   });
 
   it("AC-404-LC-17: invalid since string returns soft error (no jiraGet call)", async () => {
@@ -425,22 +462,22 @@ describe("list_comments (SSSS-401)", () => {
     expect(jiraGet).not.toHaveBeenCalled();
   });
 
-  // ---- CP-2384 AC3 (default 20 + top-level/summary dedup) ----
+  // ---- CP-2384 AC3 (default 20) + CP-2669 G4 (default 10) ----
 
-  it("AC-2384-LC-18: without maxResults, the upstream Atlassian query uses default 20", async () => {
+  it("AC-2384-LC-18: without maxResults, the upstream Atlassian query uses default 10 (CP-2669 G4)", async () => {
     vi.mocked(jiraGet).mockResolvedValueOnce({ comments: [] });
 
     await listComments({ issueIdOrKey: "TEST-1" });
 
     const callArgs = vi.mocked(jiraGet).mock.calls[0];
-    expect(callArgs[2]).toMatchObject({ maxResults: 20 });
+    expect(callArgs[2]).toMatchObject({ maxResults: 10 });
   });
 
-  it("AC-2384-LC-19: top-level envelope no longer duplicates summary fields (CP-2384 AC3 dedup)", async () => {
+  it("AC-2384-LC-19: top-level envelope is slim (CP-2669 G5) — no rawCount/count/summary/startAt/maxResults", async () => {
     vi.mocked(jiraGet).mockResolvedValueOnce({
       total: 5,
       startAt: 0,
-      maxResults: 20,
+      maxResults: 10,
       comments: [
         {
           id: "1",
@@ -459,19 +496,209 @@ describe("list_comments (SSSS-401)", () => {
     });
     const parsed = JSON.parse(result.content[0].text as string);
 
-    // CP-2384 AC3 reverse-assertion: total / orderBy / since /
-    // authorAccountId live ONLY in `summary` now (not at top-level).
-    expect(parsed).not.toHaveProperty("total");
+    // CP-2669 G5 reverse-assertion: nothing that the agent already
+    // knows (filter params, page cursors it sent) is echoed back.
+    expect(parsed).not.toHaveProperty("startAt");
+    expect(parsed).not.toHaveProperty("maxResults");
+    expect(parsed).not.toHaveProperty("rawCount");
+    expect(parsed).not.toHaveProperty("count");
+    expect(parsed).not.toHaveProperty("summary");
     expect(parsed).not.toHaveProperty("orderBy");
     expect(parsed).not.toHaveProperty("since");
     expect(parsed).not.toHaveProperty("authorAccountId");
-    // They DO exist under summary, exactly once.
-    expect(parsed.summary.total).toBe(5);
-    expect(parsed.summary.orderBy).toBe("created");
-    expect(parsed.summary.since).toBe("2026-06-01T00:00:00.000Z");
-    expect(parsed.summary.authorAccountId).toBe("acc-1");
-    // request echo is just {issueIdOrKey}.
+    // Only the slim fields survive: ok / method / request / total /
+    // returned / comments (and optional nextStartAt).
+    expect(parsed.ok).toBe(true);
+    expect(parsed.method).toBe("list_comments");
     expect(parsed.request).toEqual({ issueIdOrKey: "TEST-1" });
+    expect(parsed.total).toBe(5);
+    expect(parsed.returned).toBe(1);
+    expect(parsed.comments).toHaveLength(1);
+  });
+
+  // ---- CP-2669 G3: body truncation > 500 chars ----
+
+  it("AC-2669-LC-20: body > 500 chars is truncated to 500 + tail marker pointing at jira_get_comment {id}", async () => {
+    const bodyLen = 1200;
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      total: 1,
+      startAt: 0,
+      maxResults: 10,
+      comments: [
+        {
+          id: "9001",
+          author: { displayName: "Verbose", accountId: "acc-1" },
+          created: "2026-06-15T10:00:00.000+0800",
+          body: longBodyAdf(bodyLen),
+        },
+      ],
+    });
+
+    const result = await listComments({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    const body = parsed.comments[0].body as string;
+    // First 500 chars are the original "x" * 500.
+    expect(body.startsWith("x".repeat(500))).toBe(true);
+    // Tail marker carries the ORIGINAL pre-truncation length and the
+    // jira_get_comment {id} pointer.
+    expect(body).toContain(`共 ${bodyLen} 字符`);
+    expect(body).toContain("jira_get_comment 9001 获取");
+    // Whole body is well under 1200 chars (truncation worked).
+    expect(body.length).toBeLessThan(bodyLen);
+  });
+
+  it("AC-2669-LC-21: body exactly at 500 chars is NOT truncated", async () => {
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      total: 1,
+      startAt: 0,
+      maxResults: 10,
+      comments: [
+        {
+          id: "9002",
+          author: { displayName: "Edge", accountId: "acc-2" },
+          created: "2026-06-15T10:00:00.000+0800",
+          body: longBodyAdf(500),
+        },
+      ],
+    });
+
+    const result = await listComments({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+    const body = parsed.comments[0].body as string;
+    expect(body).toBe("x".repeat(500));
+    expect(body).not.toContain("正文已截断");
+  });
+
+  it("AC-2669-LC-22: body under 500 chars passes through untouched", async () => {
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      total: 1,
+      startAt: 0,
+      maxResults: 10,
+      comments: [
+        {
+          id: "9003",
+          author: { displayName: "Short", accountId: "acc-3" },
+          created: "2026-06-15T10:00:00.000+0800",
+          body: SAMPLE_ADF,
+        },
+      ],
+    });
+
+    const result = await listComments({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+    expect(parsed.comments[0].body).toBe(
+      "Looks good to me. @Alice please review.",
+    );
+  });
+
+  // ---- CP-2669 G5: nextStartAt presence (only when remaining) ----
+
+  it("AC-2669-LC-23: nextStartAt is present and points at next page when more comments remain", async () => {
+    // total=25, page size=10, startAt=0 → page 1 returns 10, 15 remain.
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      total: 25,
+      startAt: 0,
+      maxResults: 10,
+      comments: Array.from({ length: 10 }, (_, i) => ({
+        id: String(1000 + i),
+        author: { displayName: "U", accountId: "u" },
+        created: "2026-06-15T10:00:00.000+0800",
+        body: SAMPLE_ADF,
+      })),
+    });
+
+    const result = await listComments({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    expect(parsed.total).toBe(25);
+    expect(parsed.returned).toBe(10);
+    expect(parsed).toHaveProperty("nextStartAt");
+    // "最后一条偏移 + 1" = 0 + 10 = 10
+    expect(parsed.nextStartAt).toBe(10);
+    // Details summary mentions the pagination hint.
+    expect(result.details as string).toMatch(/→10 翻页/);
+  });
+
+  it("AC-2669-LC-24: nextStartAt is absent when no more comments remain", async () => {
+    // total=8, page size=10, all returned in one page.
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      total: 8,
+      startAt: 0,
+      maxResults: 10,
+      comments: Array.from({ length: 8 }, (_, i) => ({
+        id: String(2000 + i),
+        author: { displayName: "U", accountId: "u" },
+        created: "2026-06-15T10:00:00.000+0800",
+        body: SAMPLE_ADF,
+      })),
+    });
+
+    const result = await listComments({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    expect(parsed.total).toBe(8);
+    expect(parsed.returned).toBe(8);
+    expect(parsed).not.toHaveProperty("nextStartAt");
+    expect(result.details as string).not.toMatch(/翻页/);
+  });
+
+  it("AC-2669-LC-25: nextStartAt walks the offset forward across pages (startAt=20, total=25)", async () => {
+    // Caller already paged through 0-9 and 10-19, now on page 3.
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      total: 25,
+      startAt: 20,
+      maxResults: 10,
+      comments: Array.from({ length: 5 }, (_, i) => ({
+        id: String(3000 + i),
+        author: { displayName: "U", accountId: "u" },
+        created: "2026-06-15T10:00:00.000+0800",
+        body: SAMPLE_ADF,
+      })),
+    });
+
+    const result = await listComments({
+      issueIdOrKey: "TEST-1",
+      startAt: 20,
+    });
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    expect(parsed.total).toBe(25);
+    expect(parsed.returned).toBe(5);
+    // startAt=20, page size=10, last offset=29, next=30. But total=25
+    // so hasMore = (20 + 10 < 25) = false → no nextStartAt.
+    expect(parsed).not.toHaveProperty("nextStartAt");
+  });
+
+  // ---- CP-2669 G6: details summary never duplicates the full object ----
+
+  it("AC-2669-LC-26: details is a short summary string, NOT the full structured object", async () => {
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      total: 1,
+      startAt: 0,
+      maxResults: 10,
+      comments: [
+        {
+          id: "10001",
+          author: { displayName: "Bob", accountId: "acc-2" },
+          created: "2026-06-15T10:00:00.000+0800",
+          body: SAMPLE_ADF,
+        },
+      ],
+    });
+
+    const result = await listComments({ issueIdOrKey: "TEST-1" });
+    // Type + length + content shape check.
+    expect(typeof result.details).toBe("string");
+    const summary = result.details as string;
+    expect(summary.length).toBeLessThan(100);
+    // Must mention the ticket key + count info, but not the whole JSON.
+    expect(summary).toContain("TEST-1");
+    expect(summary).toMatch(/共.*1.*条评论/);
+    expect(summary).not.toContain("mentions");
+    expect(summary).not.toContain("author");
+    // The full payload is still in content[0].text, separately.
+    expect(result.content[0].text as string).toContain("mentions");
   });
 });
 

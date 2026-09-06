@@ -26,7 +26,16 @@ export interface JiraApiResponse {
   [key: string]: unknown;
 }
 
-/** Tool call result envelope (mirrors outline-wiki textResult shape). */
+/** Tool call result envelope (mirrors outline-wiki textResult shape).
+ *
+ * CP-2669 G1 update: `details` is now an OPTIONAL <100-char one-line
+ * semantic summary. The two pilot tools (jira_get / jira_list_comments)
+ * always set it to a short string; the other 12 tools still pass a
+ * single-arg textResult() which defaults `details` to `content` (their
+ * structured object). The `unknown` type stays so we don't break the
+ * other 12 tools' fixtures — the new semantic is "details is short or
+ * matches content", not a strict string-only contract.
+ */
 export interface ToolResult {
   content: { type: "text"; text: string }[];
   details: unknown;
