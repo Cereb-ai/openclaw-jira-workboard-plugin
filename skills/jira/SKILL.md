@@ -246,8 +246,9 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 ```
 
 - 走 `GET /issue/{key}/comment/{id}`, 两个参数都必填 (Atlassian 的 comment id 只在 issue 内唯一)
-- 输出 shape 跟 `jira_list_comments` 单条一致: `{id, author, created, body, mentions}`
-- `summary` 里带 `bodyChars` 和 `mentionCount` 方便 agent 判断要不要再下钻
+- 输出 shape 跟 `jira_list_comments` 单条一致: `{id, author, created, body, mentions}`. **CP-2700 batch 2**: 旧 `summary{key, commentId, author, created, bodyChars, mentionCount}` 块去除 (key==request.issueIdOrKey, commentId==comment.id, author==comment.author.displayName, created==comment.created, bodyChars/mentionCount 派生计数 → 与 request/comment 字段全部重复)
+- `body` **不截断** — 本工具是 `jira_list_comments` 500-char 截断的全文逃生舱 (description 声明 NEVER truncated); 仍只返回 plain text, 不暴露原始 ADF doc
+- `details` = <100 字符一句话语义摘要, 例 `成功获取 CP-2690 评论 22475: 张三 2026-09-06, 正文 1280 字`
 
 ### 三者配合的典型 workflow
 
@@ -272,22 +273,25 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 
 ---
 
-## 返回字段契约 (CP-2384, 0.5.2+; CP-2669, 0.6.0; CP-2693 batch 1)
+## 返回字段契约 (CP-2384, 0.5.2+; CP-2669, 0.6.0; CP-2693 batch 1; CP-2700 batch 2)
 
-5 个高频工具 (jira_get / jira_list_comments / jira_comment / jira_search / jira_create_subtask) 的返回字段做了统一裁剪: **agent 自己传入的请求参数不回显** (key 类标识除外), **产物标识 / 错误原因完整保留**, 反结果反馈 (block 状态) 字段不动. 下表是逐字段契约, 与实现 `src/handlers/*.ts` 逐字段一致.
+7 个高频工具 (jira_get / jira_list_comments / jira_comment / jira_search / jira_create_task / jira_create_subtask / jira_get_comment / jira_list_attachments) 的返回字段做了统一裁剪: **agent 自己传入的请求参数不回显** (key 类标识除外), **产物标识 / 错误原因完整保留**, 反结果反馈 (block 状态) 字段不动. 下表是逐字段契约, 与实现 `src/handlers/*.ts` 逐字段一致.
 
 > **裁剪原则**: 请求回声 (agent 刚发的请求参数原样回显) 视为回声噪声, 裁掉; key 类标识 (issueIdOrKey / jql / parent / accountId 等) 是 agent 标识后续 ticket 的锚, 保留; 服务端产物标识 (issue.key/id/self、comment.id/self/created) 是 agent 后续 follow-up 的依据, 保留; 错误原因 (HTTP status + message) 必须完整保留, 禁止静默.
 >
-> **CP-2669 G1 + CP-2693 batch 1 推广**: `ToolResult.details` (放在 content 之外的那份) 改为 **<100 字符一句话语义摘要**, 不再默认回填全量 `data`. 试点两工具 (jira_get / jira_list_comments) 沿用 G1; **CP-2693 batch 1** 把 4 个高频工具 (jira_search / jira_comment / jira_create_task / jira_create_subtask) 显式传入语义摘要; 其余 8 个工具 (批 2-4 域) 仍按旧行为 (单参 textResult → details 默认 = content). 摘要样例:
+> **CP-2669 G1 + CP-2693 batch 1 + CP-2700 batch 2 推广**: `ToolResult.details` (放在 content 之外的那份) 改为 **<100 字符一句话语义摘要**, 不再默认回填全量 `data`. 试点两工具 (jira_get / jira_list_comments) G1 沿用; **CP-2693 batch 1** 把 4 个高频工具 (jira_search / jira_comment / jira_create_task / jira_create_subtask) 显式传入语义摘要; **CP-2700 batch 2** 把 2 个只读查询工具 (jira_get_comment / jira_list_attachments) 显式传入语义摘要; 其余 6 个工具 (批 3-4 域) 仍按旧行为 (单参 textResult → details 默认 = content). 摘要样例:
 > - jira_get 成功: `"成功获取 CP-2667: 标题, N 附件"`
 > - jira_list_comments 成功: `"CP-2667 共 25 条评论, 本次返回 10 条 (→10 翻页)"`
 > - jira_search 成功: `"JQL 命中 12 票, 本次返回 3 票"`
 > - jira_comment 成功: `"已评论 CP-2690: 评论 22475 发布成功"`
 > - jira_create_task 成功: `"成功创建主任务 CP-2691: <summary 前截断>"`
 > - jira_create_subtask 成功: `"成功创建子任务 CP-2695 (父 CP-2690): <summary 前截断>"`
+> - jira_get_comment 成功 (CP-2700 batch 2): `"成功获取 CP-2690 评论 22475: 张三 2026-09-06, 正文 1280 字"`
+> - jira_list_attachments 成功 (CP-2700 batch 2): `"CP-2690 共 5 个附件, 总大小 2.3 MB"` / `"CP-2700 无附件"`
 > - 错误 (全部高频工具): `"<tool_name> 失败: HTTP <status> <statusText>"` / `"<tool_name> 失败: <原因>"`
 >
-> **CP-2693 batch 1 — 回声裁剪 + summary 去重推进**: `jira_create_task` 同步 `jira_create_subtask` 模式 (`request: {fields}` → `{project, summary, labels}`); `jira_comment` 旧 `summary{key, commentId, url}` 块去除; `jira_create_subtask` 旧顶层 `parent` 与 `summary{key, id, url, parent}` 块去除. 详见各工具小节.
+> **CP-2693 batch 1 — 回声裁剪 + summary 去重推进**: `jira_create_task` 同步 `jira_create_subtask` 模式 (`request: {fields}` → `{project, summary, labels}`); `jira_comment` 旧 `summary{key, commentId, url}` 块去除; `jira_create_subtask` 旧顶层 `parent` 与 `summary{key, id, url, parent}` 块去除.
+> **CP-2700 batch 2 — 只读查询补全 + 附件 compact**: `jira_get_comment` 旧 `summary{key, commentId, author, created, bodyChars, mentionCount}` 块去除 (6 个字段全部与 request/comment 重复), `body` **保留全文不截断** (本工具是 list_comments 500-char 截断的全文逃生舱). `jira_list_attachments` 每项 compact 对齐 `get.ts:109` compactAttachment 模式 (去 author.avatarUrls/active/timeZone/locale/accountType/emailAddress/self; 每项省 ~600B), 旧 `summary{key, attachmentCount}` 块去除 (count == attachments.length == summary.attachmentCount 三重复, 仅留 count). **no-cap 语义不动** (本工具是 jira_get cap 5 的全量列举逃生舱). 详见各工具小节.
 
 ### `jira_get` 返回契约
 
@@ -447,12 +451,58 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 
 **CP-2693 batch 1**: 旧顶层 `parent` 与 `summary{key, id, url, parent}` 块去除 (与 `request.parent` / `issue{key, id, self}` 重复), 与 `create_task` 同构收敛, 留 `request.parent` 为锚. `details` = <100 字符一句话摘要, 例 `成功创建子任务 CP-2695 (父 CP-2690): <summary 前截断>`.
 
+### `jira_get_comment` 返回契约 (CP-2700 batch 2 精简后)
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `ok` | `true` | 成功标记 |
+| `method` | `"get_comment"` | 方法名 |
+| `request.issueIdOrKey` | `string` | 唯一保留的 key-class 请求回声 |
+| `request.commentId` | `string` | 唯一保留的 key-class 请求回声 (参数原值, 数字字符串) |
+| `comment.id` | `string` | Atlassian 评论 id |
+| `comment.author` | `{displayName, accountId} \| null` | 作者 (displayName + accountId, **红线 #28510**: accountId 不删) |
+| `comment.created` | `string` | 创建时间 |
+| `comment.updated` | `string` | 最近更新时间 |
+| `comment.body` | `string` | **CP-2700 batch 2**: **NEVER truncated** (本工具是 `jira_list_comments` 500-char 截断的全文逃生舱); 纯文本 (非 ADF) |
+| `comment.mentions[]` | `{accountId, displayName}[]` | comment 内 @mention 列表 (deduped) |
+
+**CP-2700 batch 2**: 旧 `summary{key, commentId, author, created, bodyChars, mentionCount}` 块去除 (6 个字段全部与 `request` / `comment` 字段重复, 按 v0.5 §description 草稿池白名单建议落地). `body` 故意保留全文不截断 — 截断逻辑归 `jira_list_comments` (500-char cap), agent 拿到截断尾标 → 用 `jira_get_comment {issueIdOrKey, commentId}` 单独取完整正文 (这正是本工具的设计目的). `details` = <100 字符一句话摘要, 例 `成功获取 CP-2690 评论 22475: 张三 2026-09-06, 正文 1280 字`.
+
+### `jira_list_attachments` 返回契约 (CP-2700 batch 2 新增)
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `ok` | `true` | 成功标记 |
+| `method` | `"list_attachments"` | 方法名 |
+| `request.issueIdOrKey` | `string` | 唯一保留的请求回声 |
+| `count` | `number` | 附件总数 (无 cap; = `attachments.length`) |
+| `attachments[]` | `attachment[]` | compact 字段集 (见下) |
+
+**`attachments[]` 每项结构 (compact 模式, 对齐 `jira_get.compactAttachment`)**:
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `id` | `string` | Atlassian 附件 id |
+| `self` | `string` | REST URL (元数据) |
+| `filename` | `string` | 文件名 |
+| `size` | `number` | 字节数 |
+| `mimeType` | `string` | MIME 类型 |
+| `created` | `string` | 上传时间 |
+| `content` | `string` | 下载 URL (api.media.atlassian.com, 不含文件字节) |
+| `thumbnail` | `string?` | 缩略图 URL |
+| `author.displayName` | `string` | 上传者 displayName |
+| `author.accountId` | `string` | 上传者 accountId (红线 #28510: 保留) |
+
+**CP-2700 batch 2**: 旧 `summary{key, attachmentCount}` 块去除 (`count` == `attachments.length` == `summary.attachmentCount` 原本就是 3-way 重复). 每项 attachment compact 对齐 `get.ts:109` `compactAttachment` 模式: 去 `author.avatarUrls` / `active` / `timeZone` / `locale` / `accountType` / `emailAddress` / `self` (~600B/att), `author` 仅留 `{displayName, accountId}`. **no-cap 语义不动** — 本工具是 `jira_get` 5-attachment cap 的全量列举逃生舱, 想要完整列表 (例如 "找上周的截图") 直接调本工具, 不需要翻页 / startAt. `details` = <100 字符一句话摘要, 例 `CP-2690 共 5 个附件, 总大小 2.3 MB` / `CP-2700 无附件`.
+
 ### 反断言 (本次不动)
 
-- **低频工具返回结构未改**: verdict / transition / abandon / upload_attachment / get_comment / list_attachments / get_attachment / request_help 等 (归批 2-4 域, 本批未触碰).
-- **`jira_get` 的 `fields` 全量仍可用**: 调 `jira_get { fields: ['*all'] }` 后, `parsed.issue.fields.issuelinks` 仍是原数组 (旧 `{id, type, inwardIssue, outwardIssue}` 形状); 想 follow-up 拿到原 shape 不影响. **本批 (CP-2693 batch 1) 不动 `jira_get` 的 `fields` 逃生舱语义**, 仅修正 `jira_search` 的 silent-drop 声明矛盾 (见上文).
+- **CP-2700 batch 2 仍未动的低频工具**: verdict / transition / abandon / upload_attachment / get_attachment / request_help (归批 3-4 域). **已动**: `get_comment` / `list_attachments` (回到本批契约段).
+- **`jira_get` 的 `fields` 全量仍可用**: 调 `jira_get { fields: ['*all'] }` 后, `parsed.issue.fields.issuelinks` 仍是原数组 (旧 `{id, type, inwardIssue, outwardIssue}` 形状); 想 follow-up 拿到原 shape 不影响. **CP-2693 batch 1** 不动 `jira_get` 的 `fields` 逃生舱语义, **CP-2700 batch 2** 同样不动 (list_attachments 的 compactAttachment 字段集与 get.ts 对齐, 试点 0 触碰).
 - **`jira_search` 的 `fields` 仅服务端收窄, 不扩展返回集**: 显式传 `["description"]` / `["customfield_*"]` 等白名单外字段会被静默丢弃 (formatIssues 固定 8 字段). 需要这些字段 → 走 `jira_get { fields: [...] }` 单票逃生舱.
-- **错误路径仍走 `error` 字段**: 5 个高频工具任何 4xx / 5xx / 网络错 都返回 `{error: "jira.<method> failed: ..."}`, **不**走 result feedback 路径.
+- **错误路径仍走 `error` 字段**: 7 个高频工具任何 4xx / 5xx / 网络错 都返回 `{error: "jira.<method> failed: ..."}`, **不**走 result feedback 路径.
+- **`jira_get_comment` 的 `body` 不截断**: 必须保持 — 这是 list_comments 500-char 截断的全文逃生舱; description 声明 NEVER truncated.
+- **`jira_list_attachments` 不含文件内容**: 字节走 `jira_get_attachment`; attachments[] 项 `content` 字段是下载 URL (api.media.atlassian.com), 不是文件字节.
 
 ---
 
