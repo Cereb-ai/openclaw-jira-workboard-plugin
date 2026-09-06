@@ -337,7 +337,7 @@ export default defineToolPlugin({
       name: "jira_get_attachment",
       label: "Jira Get Attachment",
       description:
-        "Download an attachment's binary content to disk. Returns the saved file path (NOT base64 — that would balloon LLM context for large files). Default save path: /tmp/openclaw-attachments/{id}.{ext} (not inside the OpenClaw system dir). Use `saveToPath` to override. Call jira_list_attachments first to get the attachmentId for the file you want.",
+        "Download an attachment's binary to disk (path handoff, not base64). Returns {ok, method, request{attachmentId}, path, size, mimeType, filename}. path is the actual saved location (default /tmp/openclaw-attachments/{id}.{ext}, or saveToPath). details = one-line summary.",
       parameters: Type.Object({
         attachmentId: Type.String({
           description:
@@ -359,7 +359,7 @@ export default defineToolPlugin({
       name: "jira_upload_attachment",
       label: "Jira Upload Attachment",
       description:
-        "Upload a single local file to a Jira issue. Pass an absolute `filePath`; the plugin reads the file and POSTs it as a multipart/form-data attachment. 100 MB hard cap (Atlassian Cloud per-file limit). Returns the created attachment metadata (id, filename, size, mimeType, content URL).",
+        "Upload a single local file to an issue (max 100 MB). Returns {ok, method, request{issueIdOrKey}, count, attachments[{id, filename, size, mimeType, content}]}. filePath is NOT echoed. On failure: {ok:false, error:{status, message}} with synthetic status (404 missing file / 413 oversize / 500 misc). details = one-line summary.",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Issue key like 'SSSS-454'" }),
         filePath: Type.String({

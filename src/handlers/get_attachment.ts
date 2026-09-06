@@ -20,8 +20,16 @@
  *     `ext` is derived from mimeType. We DO NOT save under the OpenClaw system
  *     dir (`~/.openclaw/...`) — attachments are caller-temp, not plugin state.
  *
- * Returns: { path, size, mimeType, filename } on success. NO file content in
- * the response — caller reads from disk (smaller context, works for big files).
+ * Return contract (CP-2715 batch 4, v0.5 §5):
+ *   success → {ok, method, request{attachmentId}, path, size, mimeType, filename}.
+ *              summary 块去除 (5 字段全部与顶层 path/size/mimeType/filename 100% 重复,
+ *              v0.5 §5 草稿池定). request.saveToPath 回声去除 (agent 刚传, 最终落盘
+ *              路径由顶层 path 给出, 含默认 /tmp/openclaw-attachments/{id}.{ext}
+ *              推导值). NO file content in the response — caller reads from disk
+ *              (smaller context, works for big files).
+ *   error   → {error} (既有契约不动, 错误路径逐字保留)
+ *   details → <100 字符一句话语义摘要. success 例
+ *              "附件 12345 (hello.txt) 已下载, 11 字节"
  *
  * Why not return base64? A 50 MB image as base64 is ~67 MB of JSON in the LLM
  * context. Path-based handoff is the only sane option for arbitrary binaries.
@@ -67,22 +75,27 @@ export async function getAttachment(
   try {
     cfg = loadConfig();
   } catch (err) {
-    return textResult({ error: errorMessage(err) });
+    return textResult(
+      { error: errorMessage(err) },
+      `jira_get_attachment 失败: ${errorMessage(err)}`,
+    );
   }
 
   const attachmentId = args.attachmentId;
   if (typeof attachmentId !== "string" || attachmentId.length === 0) {
-    return textResult({
-      error: "get_attachment requires a non-empty `attachmentId` (string).",
-    });
+    return textResult(
+      { error: "get_attachment requires a non-empty `attachmentId` (string)." },
+      "jira_get_attachment 失败: 缺少 attachmentId",
+    );
   }
 
   // Optional saveToPath — caller-controlled destination.
   const saveToPath = args.saveToPath;
   if (saveToPath !== undefined && typeof saveToPath !== "string") {
-    return textResult({
-      error: "`saveToPath` must be a string (full file path).",
-    });
+    return textResult(
+      { error: "`saveToPath` must be a string (full file path)." },
+      "jira_get_attachment 失败: saveToPath 非法",
+    );
   }
 
   // Fetch metadata first to learn mimeType + filename for path derivation.
@@ -93,13 +106,15 @@ export async function getAttachment(
     meta = data;
   } catch (err) {
     if (err instanceof JiraHttpError) {
-      return textResult({
-        error: `jira.get_attachment (metadata) failed: ${err.message}`,
-      });
+      return textResult(
+        { error: `jira.get_attachment (metadata) failed: ${err.message}` },
+        `jira_get_attachment 失败: HTTP ${err.status} ${err.statusText}`,
+      );
     }
-    return textResult({
-      error: `jira.get_attachment (metadata) failed: ${errorMessage(err)}`,
-    });
+    return textResult(
+      { error: `jira.get_attachment (metadata) failed: ${errorMessage(err)}` },
+      `jira_get_attachment 失败: ${errorMessage(err)}`,
+    );
   }
 
   // Resolve destination path.
@@ -113,9 +128,10 @@ export async function getAttachment(
       const fs = await import("node:fs/promises");
       await fs.mkdir(DEFAULT_ATTACHMENT_DIR, { recursive: true });
     } catch (err) {
-      return textResult({
-        error: `failed to create ${DEFAULT_ATTACHMENT_DIR}: ${errorMessage(err)}`,
-      });
+      return textResult(
+        { error: `failed to create ${DEFAULT_ATTACHMENT_DIR}: ${errorMessage(err)}` },
+        `jira_get_attachment 失败: 创建 ${DEFAULT_ATTACHMENT_DIR} 失败`,
+      );
     }
   }
 
@@ -127,34 +143,32 @@ export async function getAttachment(
     // an ArrayBuffer → we re-implement the binary fetch here.
     const resp = await rawFetchContent(cfg, contentUrl);
     if (!resp.ok) {
-      return textResult({
-        error: `jira.get_attachment download failed: HTTP ${resp.status}`,
-      });
+      return textResult(
+        { error: `jira.get_attachment download failed: HTTP ${resp.status}` },
+        `jira_get_attachment 失败: HTTP ${resp.status}`,
+      );
     }
     const buffer = Buffer.from(await resp.arrayBuffer());
     const fs = await import("node:fs/promises");
     await fs.writeFile(destPath, buffer);
 
-    return textResult({
-      ok: true,
-      method: "get_attachment",
-      request: { attachmentId, saveToPath },
-      path: destPath,
-      size: buffer.length,
-      mimeType: meta.mimeType,
-      filename: meta.filename,
-      summary: {
-        attachmentId,
+    return textResult(
+      {
+        ok: true,
+        method: "get_attachment",
+        request: { attachmentId },
         path: destPath,
         size: buffer.length,
         mimeType: meta.mimeType,
         filename: meta.filename,
       },
-    });
+      `附件 ${attachmentId} (${meta.filename}) 已下载, ${buffer.length} 字节`,
+    );
   } catch (err) {
-    return textResult({
-      error: `jira.get_attachment download failed: ${errorMessage(err)}`,
-    });
+    return textResult(
+      { error: `jira.get_attachment download failed: ${errorMessage(err)}` },
+      `jira_get_attachment 失败: ${errorMessage(err)}`,
+    );
   }
 }
 

@@ -162,16 +162,16 @@ jira_upload_attachment { issueIdOrKey: "<issue-key>", filePath: "/path/to/screen
 jira_upload_attachment { issueIdOrKey: "<issue-key>", filePath: "/path/to/evidence.png" }
 ```
 
-**返回结构**:
+**返回结构** (CP-2715 batch 4 精简后):
 ```json
 {
   "ok": true,
   "method": "upload_attachment",
-  "request": { "issueIdOrKey": "<issue-key>", "filePath": "/tmp/screenshot.png", "size": 12345, "filename": "screenshot.png" },
+  "request": { "issueIdOrKey": "<issue-key>" },
+  "count": 1,
   "attachments": [
     { "id": "13428", "filename": "screenshot.png", "size": 12345, "mimeType": "image/png", "content": ".../attachment/content/13428" }
-  ],
-  "summary": { "issueIdOrKey": "<issue-key>", "attachmentCount": 1 }
+  ]
 }
 ```
 
@@ -273,13 +273,13 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 
 ---
 
-## 返回字段契约 (CP-2384, 0.5.2+; CP-2669, 0.6.0; CP-2693 batch 1; CP-2700 batch 2; CP-2710 batch 3)
+## 返回字段契约 (CP-2384, 0.5.2+; CP-2669, 0.6.0; CP-2693 batch 1; CP-2700 batch 2; CP-2710 batch 3; CP-2715 batch 4)
 
-11 个高频工具 (jira_get / jira_list_comments / jira_comment / jira_search / jira_create_task / jira_create_subtask / jira_get_comment / jira_list_attachments / jira_submit_verdict / jira_abandon_task / jira_request_help / jira_transition) 的返回字段做了统一裁剪: **agent 自己传入的请求参数不回显** (key 类标识除外), **产物标识 / 错误原因完整保留**, 反结果反馈 (block 状态 / verdict / 标签状态 / 转态结果) 字段不动. 下表是逐字段契约, 与实现 `src/handlers/*.ts` 逐字段一致.
+14 个高频工具 (jira_get / jira_list_comments / jira_comment / jira_search / jira_create_task / jira_create_subtask / jira_get_comment / jira_list_attachments / jira_get_attachment / jira_upload_attachment / jira_submit_verdict / jira_abandon_task / jira_request_help / jira_transition) 的返回字段做了统一裁剪: **agent 自己传入的请求参数不回显** (key 类标识除外), **产物标识 / 错误原因完整保留**, 反结果反馈 (block 状态 / verdict / 标签状态 / 转态结果) 字段不动. 下表是逐字段契约, 与实现 `src/handlers/*.ts` 逐字段一致.
 
 > **裁剪原则**: 请求回声 (agent 刚发的请求参数原样回显) 视为回声噪声, 裁掉; key 类标识 (issueIdOrKey / jql / parent / accountId 等) 是 agent 标识后续 ticket 的锚, 保留; 服务端产物标识 (issue.key/id/self、comment.id/self/created) 是 agent 后续 follow-up 的依据, 保留; 错误原因 (HTTP status + message) 必须完整保留, 禁止静默.
 >
-> **CP-2669 G1 + CP-2693 batch 1 + CP-2700 batch 2 + CP-2710 batch 3 推广**: `ToolResult.details` (放在 content 之外的那份) 改为 **<100 字符一句话语义摘要**, 不再默认回填全量 `data`. 试点两工具 (jira_get / jira_list_comments) G1 沿用; **CP-2693 batch 1** 把 4 个高频工具 (jira_search / jira_comment / jira_create_task / jira_create_subtask) 显式传入语义摘要; **CP-2700 batch 2** 把 2 个只读查询工具 (jira_get_comment / jira_list_attachments) 显式传入语义摘要; **CP-2710 batch 3** 把 4 个状态机写工具 (jira_submit_verdict / jira_abandon_task / jira_request_help / jira_transition) 显式传入语义摘要; 剩 2 个工具 (jira_upload_attachment / jira_get_attachment) 归批 4. 摘要样例:
+> **CP-2669 G1 + CP-2693 batch 1 + CP-2700 batch 2 + CP-2710 batch 3 + CP-2715 batch 4 全量推广**: `ToolResult.details` (放在 content 之外的那份) 改为 **<100 字符一句话语义摘要**, 不再默认回填全量 `data`. 试点两工具 (jira_get / jira_list_comments) G1 沿用; **CP-2693 batch 1** 把 4 个高频工具 (jira_search / jira_comment / jira_create_task / jira_create_subtask) 显式传入语义摘要; **CP-2700 batch 2** 把 2 个只读查询工具 (jira_get_comment / jira_list_attachments) 显式传入语义摘要; **CP-2710 batch 3** 把 4 个状态机写工具 (jira_submit_verdict / jira_abandon_task / jira_request_help / jira_transition) 显式传入语义摘要; **CP-2715 batch 4** 把 2 个附件传输工具 (jira_get_attachment / jira_upload_attachment) 显式传入语义摘要 — 至此 14 个高频工具 (jira_get / jira_list_comments / jira_search / jira_comment / jira_create_task / jira_create_subtask / jira_get_comment / jira_list_attachments / jira_get_attachment / jira_upload_attachment / jira_submit_verdict / jira_abandon_task / jira_request_help / jira_transition) 全部推广完成. 摘要样例:
 > - jira_get 成功: `"成功获取 CP-2667: 标题, N 附件"`
 > - jira_list_comments 成功: `"CP-2667 共 25 条评论, 本次返回 10 条 (→10 翻页)"`
 > - jira_search 成功: `"JQL 命中 12 票, 本次返回 3 票"`
@@ -293,12 +293,15 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 > - jira_submit_verdict FAIL (CP-2710 batch 3): `"CP-2690 已 FAIL: escalated 已标 + assignee 已清"`
 > - jira_abandon_task 成功 (CP-2710 batch 3): `"CP-2690 子任务已废弃: 评论 + 清 assignee + 转「已完成」+ 清 escalated"`
 > - jira_request_help 成功 (CP-2710 batch 3): `"CP-2690 主任务已问人: 评论已发 + wait-approval 标签已加"` / `"... + @提及 张三"`
+> - jira_get_attachment 成功 (CP-2715 batch 4): `"附件 12345 (hello.txt) 已下载, 11 字节"`
+> - jira_upload_attachment 成功 (CP-2715 batch 4): `"已上传 screenshot.png (12345 字节) 至 SSSS-454"`
 > - 状态机 partial (CP-2710 batch 3): `"CP-2690 部分完成: 评论已发但转态失败, 见 hint"`
 > - 错误 (全部高频工具): `"<tool_name> 失败: HTTP <status> <statusText>"` / `"<tool_name> 失败: <原因>"`
 >
 > **CP-2693 batch 1 — 回声裁剪 + summary 去重推进**: `jira_create_task` 同步 `jira_create_subtask` 模式 (`request: {fields}` → `{project, summary, labels}`); `jira_comment` 旧 `summary{key, commentId, url}` 块去除; `jira_create_subtask` 旧顶层 `parent` 与 `summary{key, id, url, parent}` 块去除.
 > **CP-2700 batch 2 — 只读查询补全 + 附件 compact**: `jira_get_comment` 旧 `summary{key, commentId, author, created, bodyChars, mentionCount}` 块去除 (6 个字段全部与 request/comment 重复), `body` **保留全文不截断** (本工具是 list_comments 500-char 截断的全文逃生舱). `jira_list_attachments` 每项 compact 对齐 `get.ts:109` compactAttachment 模式 (去 author.avatarUrls/active/timeZone/locale/accountType/emailAddress/self; 每项省 ~600B), 旧 `summary{key, attachmentCount}` 块去除 (count == attachments.length == summary.attachmentCount 三重复, 仅留 count). **no-cap 语义不动** (本工具是 jira_get cap 5 的全量列举逃生舱).
 > **CP-2710 batch 3 — 状态机写工具 4 件套精简**: `jira_transition` 旧 `summary{key, to, toCategory, matchedBy}` 块去除 (4 字段全部与 transition 块重复), `matchedBy` 合并进 `transition{}` 块 (L103 vs L114 同值双份消除), `request.targetStatus` / `request.resolvedBy` 回声去除 (仅留 `request.issueIdOrKey` 锚). 无匹配 error + hint「Available transitions」完整保留. `jira_submit_verdict` PASS 分支顶层 `verdict:"PASS"` 补齐 (旧仅 FAIL 顶层有, PASS 只在 summary 内), 旧 `summary{key, verdict, commentId, transitionedTo, toCategory}` 块去除; FAIL 成功路径 `hint` 字段去除 (语义冗余于 label 反馈, v0.5 草稿池定); FAIL 顶层 verdict 保留. `jira_abandon_task` 旧 `summary{key, commentId, assigneeCleared, transitionedTo, labelsRemoved, labels, labelsRemoveError}` 块去除 (`labels` 数组回声裁, `labelsRemoved` 布尔 + `labelsRemoveError` 字符串保留), top-level `comment` / `assigneeCleared` / `labelsRemoved` / `labelsRemoveError` / `transition` 全保留 (状态机写). `jira_request_help` 旧 `summary{key, commentId, label, mentioned}` 块去除 (4 字段全部与顶层 label/method/comment 重复), `mentioned` 字段从 summary 移出至顶层 (`accountId | null`, **红线 #28510** accountId 保留). 4 工具 partial 分支结构 0 改动 (CP-2710 红线 #28510). 详见各工具小节.
+> **CP-2715 batch 4 — 附件传输 2 件套精简 (12 工具推广收口)**: `jira_get_attachment` 旧 `summary{attachmentId, path, size, mimeType, filename}` 块去除 (5 字段 100% 与顶层 `path` / `size` / `mimeType` / `filename` 重复), `request.saveToPath` 回声去除 (agent 刚传, 最终落盘路径由顶层 `path` 给出, 含默认 `/tmp/openclaw-attachments/{id}.{ext}` 推导值). 错误路径 `{error}` 契约 0 改动 (L75/L83/L96/L100/L116/L130/L155 9 个 textResult 调用点全部加 details 第二参). `jira_upload_attachment` 旧 `summary{issueIdOrKey, filePath, filename, size, attachmentCount}` 块去除 (5 字段全部与 request / 顶层 / attachments 重复; `filePath` 全路径重复 2 次可上百字符, 体积最大冗余), `request.filePath` / `size` / `filename` 回声去除 (仅留 `request.issueIdOrKey` 锚); `attachments` 数组逐项显式 pick 5 字段 (`id` / `filename` / `size` / `mimeType` / `content`), 防止 Atlassian 原始项 `author` / `created` / `self` / `thumbnail` 等混入; `attachmentCount` 由派生 `count: items.length` 替换; 错误对象 `{ok:false, error:{status,message}}` 与 synthetic status (404 missing file / 413 oversize / 500 misc) 语义完整保留. 2 工具 17 个 textResult 调用点 (get 9 + upload 8) 全部双参且 `details` <100 字符. **CP-2714 非阻塞 suggestion ① L278 头部枚举 off-by-one 修正**: 旧「11 个高频工具」与括号枚举 12 个不一致 → 本批统一为 14 个 (12 工具推广完成, 工具数与 description 14 named tools 对齐). 详见各工具小节.
 
 ### `jira_get` 返回契约
 
@@ -618,17 +621,73 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 
 **CP-2710 batch 3**: 旧 `summary{key, commentId, label, mentioned}` 块去除 (4 字段全部与顶层 label/method/comment 重复); `mentioned` 字段从 summary 移出至顶层 (`accountId | null`, **红线 #28510** accountId 保留). orchestrator 仍是 owner, 不清 assignee (description 同步: 旧「+ 清 assignee」表述错误, 实际未清; CP-2710 落地后 description 与实现一致). partial 分支结构 0 改动 (CP-2710 红线 #28510). `details` = <100 字符一句话摘要, 例 `CP-2690 主任务已问人: 评论已发 + wait-approval 标签已加` / `... + @提及 张三` / `CP-2690 部分完成: 评论已发但 wait-approval label 失败, 见 hint`.
 
+### `jira_get_attachment` 返回契约 (CP-2715 batch 4 精简后)
+
+**成功**:
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `ok` | `true` | 成功标记 |
+| `method` | `"get_attachment"` | 方法名 |
+| `request.attachmentId` | `string` | 唯一保留的 key-class 请求回声 |
+| `path` | `string` | 实际落盘路径 (默认 `/tmp/openclaw-attachments/{id}.{ext}`, 或 `saveToPath`) |
+| `size` | `number` | 文件字节数 (实际下载) |
+| `mimeType` | `string` | MIME 类型 (来自 attachment metadata) |
+| `filename` | `string` | 原始文件名 (来自 attachment metadata) |
+
+**错误**:
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `error` | `string` | 错误信息 (CP-2715 红线: 错误路径 0 改动, 文案逐字保留) |
+
+**CP-2715 batch 4**: 旧 `summary{attachmentId, path, size, mimeType, filename}` 块去除 (5 字段 100% 与顶层 `path` / `size` / `mimeType` / `filename` 重复, 是 v0.5 §5 草稿池最直白的「整块重复」案例). `request.saveToPath` 回声去除 (agent 刚传的参数; 最终落盘路径由顶层 `path` 给出, 含默认 `/tmp/openclaw-attachments/{id}.{ext}` 推导值). 错误路径契约 0 改动 — `{error}` 文案逐字保留 (`get_attachment requires a non-empty `attachmentId`` / `saveToPath` must be a string / `jira.get_attachment (metadata) failed: ...` / `failed to create /tmp/openclaw-attachments: ...` / `jira.get_attachment download failed: HTTP <status>` / `... download failed: <原因>`). 9 个 textResult 调用点 (L70/L75/L83/L96/L100/L116/L130/L138/L155) 全部双参且 `details` <100 字符. `details` = <100 字符一句话摘要, 例 `附件 12345 (hello.txt) 已下载, 11 字节` / `jira_get_attachment 失败: HTTP 404` / `jira_get_attachment 失败: 缺少 attachmentId`.
+
+### `jira_upload_attachment` 返回契约 (CP-2715 batch 4 精简后)
+
+**成功**:
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `ok` | `true` | 成功标记 |
+| `method` | `"upload_attachment"` | 方法名 |
+| `request.issueIdOrKey` | `string` | 唯一保留的 key-class 请求回声 |
+| `count` | `number` | 上传成功的附件数 (= `attachments.length`, 派生字段) |
+| `attachments[]` | `attachment[]` | compact 5 字段集 (见下) |
+
+**`attachments[]` 每项结构 (compact 模式, v0.5 §6 草稿池 5 字段)**:
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `id` | `string` | Atlassian 附件 id |
+| `filename` | `string` | 上传的文件名 (= `basename(filePath)`) |
+| `size` | `number` | 文件字节数 (来自 Atlassian 上传响应) |
+| `mimeType` | `string` | MIME 类型 |
+| `content` | `string` | 下载 URL (api.media.atlassian.com, 不含文件字节) |
+
+**错误** (既有契约, CP-2715 红线 0 改动):
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `ok` | `false` | 失败标记 |
+| `error.status` | `number` | synthetic 状态: 404 (missing file) / 413 (oversize, >100MB) / 500 (misc) / upstream HTTP 4xx/5xx 透传 |
+| `error.message` | `string` | 错误信息 (synthetic message 文本逐字保留 / 上游 `HTTP <status> <statusText>: <body>` 透传前 500 字符) |
+
+**CP-2715 batch 4**: 旧 `summary{issueIdOrKey, filePath, filename, size, attachmentCount}` 块去除 (5 字段全部与 request / 顶层 / attachments 重复; `filePath` 全路径重复 2 次可上百字符, 是 12 工具单点最大体积冗余). `request.filePath` / `request.size` / `request.filename` 回声去除 (仅留 `request.issueIdOrKey` 锚). `attachments` 数组**逐项显式 pick 5 字段** (`id` / `filename` / `size` / `mimeType` / `content`), 防止 Atlassian 原始项 `author` / `created` / `self` / `thumbnail` / `metadata` 等混入. `attachmentCount` 由派生 `count: items.length` 替换 (去重 — 旧 `count == attachments.length == summary.attachmentCount` 原本就是 3-way 重复). 错误对象 `{ok:false, error:{status,message}}` 与 synthetic status (404 missing file / 413 oversize / 500 misc) 语义完整保留; 上游 HTTP 4xx/5xx 透传 `res.status` 0 改动. `MAX_FILE_SIZE = 100 * 1024 * 1024` (100 MB) 输入侧 cap 0 改动. 8 个 textResult 调用点 (L53/L58/L69/L82/L92/L121/L132/L151) 全部双参且 `details` <100 字符. `details` = <100 字符一句话摘要, 例 `已上传 screenshot.png (12345 字节) 至 SSSS-454` / `jira_upload_attachment 失败: 文件不存在 /tmp/x.png` / `jira_upload_attachment 失败: 文件超 100MB (104857601 字节)` / `jira_upload_attachment 失败: HTTP 401`.
+
 ### 反断言 (本次不动)
 
-- **CP-2710 batch 3 仍未动的低频工具**: `upload_attachment` / `get_attachment` (归批 4 域). **已动**: `verdict` / `transition` / `abandon` / `request_help` (回到本批契约段).
+- **CP-2715 batch 4 全量覆盖 (12 工具推广收口)**: 至此 14 个高频工具 (除 2 个 add_label / remove_label / block 内部分支工具外) 全部精简完成. **CP-2715 batch 4 新动**: `jira_get_attachment` / `jira_upload_attachment` (回到本批契约段). 历史批次: **CP-2693 batch 1** 动 `search` / `comment` / `create_task` / `create_subtask`; **CP-2700 batch 2** 动 `get_comment` / `list_attachments`; **CP-2710 batch 3** 动 `submit_verdict` / `abandon_task` / `request_help` / `transition`.
 - **`jira_get` 的 `fields` 全量仍可用**: 调 `jira_get { fields: ['*all'] }` 后, `parsed.issue.fields.issuelinks` 仍是原数组 (旧 `{id, type, inwardIssue, outwardIssue}` 形状); 想 follow-up 拿到原 shape 不影响. **CP-2693 batch 1** / **CP-2700 batch 2** / **CP-2710 batch 3** 都不动 `jira_get` 的 `fields` 逃生舱语义.
 - **`jira_search` 的 `fields` 仅服务端收窄, 不扩展返回集**: 显式传 `["description"]` / `["customfield_*"]` 等白名单外字段会被静默丢弃 (formatIssues 固定 8 字段). 需要这些字段 → 走 `jira_get { fields: [...] }` 单票逃生舱.
-- **错误路径仍走 `error` 字段**: 12 个高频工具任何 4xx / 5xx / 网络错 都返回 `{error: "jira.<method> failed: ..."}`, **不**走 result feedback 路径.
+- **错误路径仍走 `error` 字段**: 14 个高频工具任何 4xx / 5xx / 网络错 都返回 `{error: "jira.<method> failed: ..."}` (12 个查询/状态机写工具) 或 `{ok:false, error:{status,message}}` (2 个 upload_attachment / 关联工具的合成错误结构, 含 synthetic status 404/413/500), **不**走 result feedback 路径. **CP-2715 batch 4**: 2 个附件传输工具的合成错误对象 shape 完整保留 — `{ok:false, error:{status,message}}` 结构与 status 语义 (404 missing file / 413 oversize / 500 misc) 0 改动, 仅 `details` 第二参补充 <100 字符一句话摘要.
 - **`jira_get_comment` 的 `body` 不截断**: 必须保持 — 这是 list_comments 500-char 截断的全文逃生舱; description 声明 NEVER truncated.
 - **`jira_list_attachments` 不含文件内容**: 字节走 `jira_get_attachment`; attachments[] 项 `content` 字段是下载 URL (api.media.atlassian.com), 不是文件字节.
 - **CP-2710 batch 3 状态机写工具 partial 分支结构 0 改动**: `submit_verdict` / `abandon_task` / `request_help` 三个 partial 分支 (4 个 partial 路径) 字段集合 / 顺序 / 命名 / hint 文案 完整保留 (CP-2710 红线 #28510); 仅 `details` 字段从 dict 摘要 (与 content 等大) 改为 <100 字符 string.
 - **CP-2710 batch 3 author.accountId / mentions 保留**: `jira_request_help` 的 `mentioned` 字段含 accountId (红线 #28510: accountId 不删), 写 partial 路径也保留 `comment` 含 author 信息; `jira_submit_verdict` 评论 author 由 server 端生成, 路径不涉及.
 - **CP-2710 batch 3 verdict / label / assigneeCleared 语义与执行顺序 0 改动**: `submit_verdict` FAIL 路径仍先 comment → 后 label → 后 clear assignee; PASS 路径仍先 comment → 后 transition; `abandon_task` 5 步顺序不变; `request_help` 3 步顺序不变.
+- **CP-2715 batch 4 attachments compact 5 字段 + error 结构 0 改动**: `jira_upload_attachment` 的 `attachments[]` 始终是 `{id, filename, size, mimeType, content}` 这 5 字段, 即使 Atlassian 上传响应带 `author` / `created` / `self` / `thumbnail` / `_links` / `metadata` 等附加字段也 0 混入 (handler 内 `pickCompact` 显式 pick, 不 `...rest`). 错误对象 `{ok:false, error:{status,message}}` 与 synthetic status 语义 (404 missing file / 413 oversize / 500 misc / 上游 4xx/5xx 透传 res.status) 完整保留. `MAX_FILE_SIZE = 100 * 1024 * 1024` 输入侧 cap 0 改动 (Atlassian Cloud 单附件硬上限).
+- **CP-2715 batch 4 default 落盘路径 0 改动**: `jira_get_attachment` 默认 `/tmp/openclaw-attachments/{id}.{ext}` (ext 来自 mimeType 推导, 见 `extFromMime` 表); 不入 git 系统目录 (`~/.openclaw/...`); caller `saveToPath` 覆盖时不自动 `mkdir` 父目录 (caller 责任). 顶层 `path` 始终是最终落盘路径, 反映默认路径推导值.
 
 ---
 
