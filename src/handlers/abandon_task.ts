@@ -17,6 +17,16 @@
  *
  * Partial-failure reporting: each later step reports what was already
  * committed so the agent can manually finish what remains.
+ *
+ * Return contract (CP-2710 batch 3, v0.5 §6/§7/§8):
+ *   success  → {ok, method, comment{id,self}, assigneeCleared, labelsRemoved,
+ *                labelsRemoveError, transition{id, name, to}} (summary 块
+ *                去除; labels 回声去除, 保留布尔 + 错误字符串)
+ *   partial  → 结构 0 改动, 仅 details 摘要化 (CP-2710 红线 #28510)
+ *   error    → {error}; 不变
+ *   details  → <100 字符一句话语义摘要; success 例
+ *                "CP-2690 子任务已废弃: 评论 + 清 assignee + 转「已完成」+ 清 escalated"
+ *              partial 例 "CP-2690 部分废弃: 评论已发但转态失败, 见 hint"
  */
 import { loadConfig } from "../auth.js";
 import { jiraGet, jiraPost, jiraPut, JiraHttpError } from "../http.js";
@@ -40,20 +50,25 @@ export async function abandonTask(
   try {
     cfg = loadConfig();
   } catch (err) {
-    return textResult({ error: errorMessage(err) });
+    return textResult(
+      { error: errorMessage(err) },
+      `jira_abandon_task 失败: ${errorMessage(err)}`,
+    );
   }
 
   const issueIdOrKey = args.issueIdOrKey;
   if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
-    return textResult({
-      error: "abandon_task requires a non-empty `issueIdOrKey` (string).",
-    });
+    return textResult(
+      { error: "abandon_task requires a non-empty `issueIdOrKey` (string)." },
+      "jira_abandon_task 失败: 缺少 issueIdOrKey",
+    );
   }
   const reason = args.reason;
   if (typeof reason !== "string" || reason.trim().length === 0) {
-    return textResult({
-      error: "abandon_task requires `reason` (string, non-empty).",
-    });
+    return textResult(
+      { error: "abandon_task requires `reason` (string, non-empty)." },
+      "jira_abandon_task 失败: 缺少 reason",
+    );
   }
   const labelsArg = args.labels;
   let labelsToRemove: string[] = DEFAULT_LABELS_TO_REMOVE;
@@ -64,9 +79,10 @@ export async function abandonTask(
         (label) => typeof label === "string" && label.trim().length > 0,
       )
     ) {
-      return textResult({
-        error: "abandon_task `labels` must be an array of non-empty strings when provided.",
-      });
+      return textResult(
+        { error: "abandon_task `labels` must be an array of non-empty strings when provided." },
+        "jira_abandon_task 失败: labels 形态错",
+      );
     }
     labelsToRemove = labelsArg as string[];
   }
@@ -80,15 +96,19 @@ export async function abandonTask(
     isSubtask = data?.fields?.issuetype?.subtask === true;
   } catch (err) {
     const msg = err instanceof JiraHttpError ? err.message : errorMessage(err);
-    return textResult({
-      error: `jira.abandon_task (step 1: get issue) failed: ${msg}.`,
-    });
+    return textResult(
+      { error: `jira.abandon_task (step 1: get issue) failed: ${msg}.` },
+      `jira_abandon_task 失败: HTTP ${msg}`,
+    );
   }
   if (!isSubtask) {
-    return textResult({
-      error:
-        `abandon_task 只能用于子任务。${issueIdOrKey} is a main task — use submit_verdict instead.`,
-    });
+    return textResult(
+      {
+        error:
+          `abandon_task 只能用于子任务。${issueIdOrKey} is a main task — use submit_verdict instead.`,
+      },
+      `jira_abandon_task 失败: ${issueIdOrKey} 非子任务`,
+    );
   }
 
   // Step 2: post the abandon comment.
@@ -128,9 +148,10 @@ export async function abandonTask(
 
   const contentErr = validateAdfContentNodes(abandonComment);
   if (contentErr) {
-    return textResult({
-      error: `abandon_task ADF structure error: ${contentErr}. Please report as a plugin bug.`,
-    });
+    return textResult(
+      { error: `abandon_task ADF structure error: ${contentErr}. Please report as a plugin bug.` },
+      `jira_abandon_task 失败: ADF 内部错 ${contentErr}`,
+    );
   }
 
   let commentId: string | undefined;
@@ -143,10 +164,11 @@ export async function abandonTask(
     commentSelf = data.self;
   } catch (err) {
     const msg = err instanceof JiraHttpError ? err.message : errorMessage(err);
-    return textResult({
-      error: `jira.abandon_task (step 2: comment) failed: ${msg}. ` +
-        "No state change yet.",
-    });
+    return textResult(
+      { error: `jira.abandon_task (step 2: comment) failed: ${msg}. ` +
+        "No state change yet." },
+      `jira_abandon_task 失败: 评论发布错误 ${msg}`,
+    );
   }
 
   // Step 3: clear the assignee.
@@ -158,17 +180,20 @@ export async function abandonTask(
     assigneeCleared = true;
   } catch (err) {
     const msg = err instanceof JiraHttpError ? err.message : errorMessage(err);
-    return textResult({
-      ok: false,
-      method: "abandon_task",
-      partial: true,
-      comment: { id: commentId, self: commentSelf },
-      hint:
-        `Comment was posted. To finish: manually clear assignee + transition on ${issueIdOrKey}.`,
-      error:
-        `jira.abandon_task (step 3: clear assignee) failed: ${msg}. ` +
-        `Comment was already posted; assignee NOT cleared.`,
-    });
+    return textResult(
+      {
+        ok: false,
+        method: "abandon_task",
+        partial: true,
+        comment: { id: commentId, self: commentSelf },
+        hint:
+          `Comment was posted. To finish: manually clear assignee + transition on ${issueIdOrKey}.`,
+        error:
+          `jira.abandon_task (step 3: clear assignee) failed: ${msg}. ` +
+          `Comment was already posted; assignee NOT cleared.`,
+      },
+      `${issueIdOrKey} 部分废弃: 评论已发但清 assignee 失败, 见 hint`,
+    );
   }
 
   // Step 4: list transitions.
@@ -181,29 +206,35 @@ export async function abandonTask(
     transitions = Array.isArray(data?.transitions) ? data.transitions : [];
   } catch (err) {
     const msg = err instanceof JiraHttpError ? err.message : errorMessage(err);
-    return textResult({
-      ok: false,
-      method: "abandon_task",
-      partial: true,
-      comment: { id: commentId, self: commentSelf },
-      assigneeCleared,
-      error:
-        `jira.abandon_task (step 4: list transitions) failed: ${msg}. ` +
-        `Comment already posted; assignee ${assigneeCleared ? "cleared" : "NOT cleared"}.`,
-    });
+    return textResult(
+      {
+        ok: false,
+        method: "abandon_task",
+        partial: true,
+        comment: { id: commentId, self: commentSelf },
+        assigneeCleared,
+        error:
+          `jira.abandon_task (step 4: list transitions) failed: ${msg}. ` +
+          `Comment already posted; assignee ${assigneeCleared ? "cleared" : "NOT cleared"}.`,
+      },
+      `${issueIdOrKey} 部分废弃: 评论已发但查 transition 失败`,
+    );
   }
 
   if (transitions.length === 0) {
-    return textResult({
-      ok: false,
-      method: "abandon_task",
-      partial: true,
-      comment: { id: commentId, self: commentSelf },
-      assigneeCleared,
-      error:
-        `No transitions available for ${issueIdOrKey} — may be in a terminal state. ` +
-        `Comment already posted; assignee ${assigneeCleared ? "cleared" : "NOT cleared"}.`,
-    });
+    return textResult(
+      {
+        ok: false,
+        method: "abandon_task",
+        partial: true,
+        comment: { id: commentId, self: commentSelf },
+        assigneeCleared,
+        error:
+          `No transitions available for ${issueIdOrKey} — may be in a terminal state. ` +
+          `Comment already posted; assignee ${assigneeCleared ? "cleared" : "NOT cleared"}.`,
+      },
+      `${issueIdOrKey} 部分废弃: 评论已发但无可用 transition`,
+    );
   }
 
   const target = TARGET_STATUS.toLowerCase();
@@ -214,16 +245,19 @@ export async function abandonTask(
     const available = transitions.map(
       (t) => `${t.name} → ${t.to?.name ?? "?"}`,
     );
-    return textResult({
-      ok: false,
-      method: "abandon_task",
-      partial: true,
-      comment: { id: commentId, self: commentSelf },
-      assigneeCleared,
-      error:
-        `targetStatus "${TARGET_STATUS}" not in available transitions: [${available.join(", ")}]. ` +
-        `Comment already posted; assignee ${assigneeCleared ? "cleared" : "NOT cleared"}.`,
-    });
+    return textResult(
+      {
+        ok: false,
+        method: "abandon_task",
+        partial: true,
+        comment: { id: commentId, self: commentSelf },
+        assigneeCleared,
+        error:
+          `targetStatus "${TARGET_STATUS}" not in available transitions: [${available.join(", ")}]. ` +
+          `Comment already posted; assignee ${assigneeCleared ? "cleared" : "NOT cleared"}.`,
+      },
+      `${issueIdOrKey} 部分废弃: 评论已发但无「${TARGET_STATUS}」transition`,
+    );
   }
 
   // Step 4: execute the transition.
@@ -233,16 +267,19 @@ export async function abandonTask(
     });
   } catch (err) {
     const msg = err instanceof JiraHttpError ? err.message : errorMessage(err);
-    return textResult({
-      ok: false,
-      method: "abandon_task",
-      partial: true,
-      comment: { id: commentId, self: commentSelf },
-      assigneeCleared,
-      error:
-        `jira.abandon_task (step 4: execute transition) failed: ${msg}. ` +
-        `Comment already posted; assignee ${assigneeCleared ? "cleared" : "NOT cleared"}.`,
-    });
+    return textResult(
+      {
+        ok: false,
+        method: "abandon_task",
+        partial: true,
+        comment: { id: commentId, self: commentSelf },
+        assigneeCleared,
+        error:
+          `jira.abandon_task (step 4: execute transition) failed: ${msg}. ` +
+          `Comment already posted; assignee ${assigneeCleared ? "cleared" : "NOT cleared"}.`,
+      },
+      `${issueIdOrKey} 部分废弃: 评论已发但转态失败`,
+    );
   }
 
   let labelsRemoved = true;
@@ -263,28 +300,22 @@ export async function abandonTask(
     }
   }
 
-  return textResult({
-    ok: true,
-    method: "abandon_task",
-    comment: { id: commentId, self: commentSelf },
-    assigneeCleared,
-    labelsRemoved,
-    labelsRemoveError,
-    transition: {
-      id: match.id,
-      name: match.name,
-      to: match.to?.name,
-    },
-    summary: {
-      key: issueIdOrKey,
-      commentId,
-      assigneeCleared: true,
-      transitionedTo: match.to?.name,
+  return textResult(
+    {
+      ok: true,
+      method: "abandon_task",
+      comment: { id: commentId, self: commentSelf },
+      assigneeCleared,
       labelsRemoved,
-      labels: labelsToRemove,
       labelsRemoveError,
+      transition: {
+        id: match.id,
+        name: match.name,
+        to: match.to?.name,
+      },
     },
-  });
+    `${issueIdOrKey} 子任务已废弃: 评论 + 清 assignee + 转「${match.to?.name ?? ""}」+ 清 ${labelsToRemove.join(",")}${labelsRemoved ? "" : " (部分 label 清除失败)"}`,
+  );
 }
 
 function errorMessage(err: unknown): string {

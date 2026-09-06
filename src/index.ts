@@ -247,7 +247,7 @@ export default defineToolPlugin({
       name: "jira_submit_verdict",
       label: "Jira Submit Verdict",
       description:
-        "⚠️ ATOMIC — 一次调用即关闭 ticket，不需要再额外调用 jira_transition。verdict=PASS: 自动发评论 + 转「已完成」; verdict=FAIL: 自动发评论 + 加 escalated label + 清 assignee。reason 必填 (FAIL 时). 调完别再 transition 会覆盖已转好的状态。",
+        "⚠️ ATOMIC — 一次调用即关闭 ticket，不需要再额外调用 jira_transition。verdict=PASS: 自动发评论 + 转「已完成」; verdict=FAIL: 自动发评论 + 加 escalated label + 清 assignee。reason 必填 (FAIL 时). 调完别再 transition 会覆盖已转好的状态。返回 success={ok, method, verdict, comment{id,self}, transition{id,name,to,toCategory,matchedBy}} (PASS) / {label, assigneeCleared} (FAIL); partial={ok:false, partial:true, verdict, comment, hint?}; 顶层 verdict 字段统一 (PASS 分支补齐); summary 块去除。details <100 字符一句话摘要.",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Issue key" }),
         verdict: Type.Union(
@@ -273,7 +273,7 @@ export default defineToolPlugin({
       name: "jira_abandon_task",
       label: "Jira Abandon Task",
       description:
-        "Abandon a subtask (re-planning). 评论 + 清 assignee + 转「已完成」+ 清 escalated label by default. Subtask-only (main task → submit_verdict).",
+        "Abandon a subtask (re-planning). 评论 + 清 assignee + 转「已完成」+ 清 escalated label by default. Subtask-only (main task → submit_verdict). 返回 success={ok, method, comment{id,self}, assigneeCleared, labelsRemoved, labelsRemoveError, transition{id,name,to}}; partial 结构 0 改动仅 details 摘要; summary 块去除. details <100 字符一句话摘要.",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Subtask issue key" }),
         reason: Type.String({ description: "Why abandoning" }),
@@ -293,7 +293,7 @@ export default defineToolPlugin({
       name: "jira_request_help",
       label: "Jira Request Help",
       description:
-        "Main task asks a human for guidance. 评论 + wait-approval label + 清 assignee. Main-task-only (subtask → submit_verdict FAIL).",
+        "Main task asks a human for guidance. 评论 + wait-approval label (orchestrator 仍为 owner, 不清 assignee). Main-task-only (subtask → submit_verdict FAIL). 返回 success={ok, method, comment{id,self}, label:\"wait-approval\", mentioned: accountId|null}; partial 结构 0 改动仅 details 摘要; summary 块去除. details <100 字符一句话摘要.",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Main task issue key" }),
         question: Type.String({ description: "Question to ask the human" }),
@@ -307,7 +307,7 @@ export default defineToolPlugin({
       name: "jira_transition",
       label: "Jira Transition",
       description:
-        "⚠️ 调试/人为干预专用 — 正常 ticket 生命周期请用 jira_submit_verdict（PASS/FAIL 自动 close）。普通 agent 不应主动调本方法（会绕过 verdict 流程 + 丢失审计），仅 cereb-pilot dispatcher 或 Leo 手动修复 stuck state 时使用。Logical names: 'todo' / 'in_progress' / 'done' / 'review' / 'blocked' / 'reopen' / 'cancelled' (project-agnostic). Falls back to exact project status name.",
+        "⚠️ 调试/人为干预专用 — 正常 ticket 生命周期请用 jira_submit_verdict（PASS/FAIL 自动 close）。普通 agent 不应主动调本方法（会绕过 verdict 流程 + 丢失审计），仅 cereb-pilot dispatcher 或 Leo 手动修复 stuck state 时使用。Logical names: 'todo' / 'in_progress' / 'done' / 'review' / 'blocked' / 'reopen' / 'cancelled' (project-agnostic). Falls back to exact project status name. 返回 success={ok, method, request{issueIdOrKey}, transition{id,name,to,category,matchedBy}}; matchedBy 合并进 transition 块; summary 块 + request.targetStatus/resolvedBy 回声去除. 无匹配 error+hint「Available transitions」完整保留. details <100 字符一句话摘要.",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Issue key" }),
         targetStatus: Type.String({

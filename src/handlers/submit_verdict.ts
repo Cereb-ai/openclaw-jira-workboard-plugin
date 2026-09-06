@@ -22,6 +22,20 @@
  *
  * "Atomic" here means "in one method call from the agent's perspective" —
  * not DB-style rollback. We don't fabricate idempotency for re-runs.
+ *
+ * Return contract (CP-2710 batch 3, v0.5 §6/§7/§8):
+ *   success  → {ok, method, verdict, comment{id,self},
+ *                transition{id, name, to, toCategory} (PASS only) /
+ *                label, assigneeCleared (FAIL only)}
+ *              summary 块去除; FAIL 成功路径 hint 去除 (语义冗余于 label
+ *              反馈, 草稿池已定); partial 分支结构 0 改动 (error + hint
+ *              完整保留, CP-2710 红线 #28510)
+ *   details  → <100 字符一句话语义摘要; success PASS 例
+ *                "CP-2690 已 PASS: 评论已发 + 转「已完成」"
+ *              success FAIL 例
+ *                "CP-2690 已 FAIL: escalated 已标 + assignee 已清"
+ *              partial 例
+ *                "CP-2690 部分完成: 评论已发但转态失败, 见 hint"
  */
 import { JiraPluginError, loadConfig } from "../auth.js";
 import { jiraGet, jiraPost, jiraPut, JiraHttpError } from "../http.js";
@@ -44,26 +58,32 @@ export async function submitVerdict(
   try {
     cfg = loadConfig();
   } catch (err) {
-    return textResult({ error: errorMessage(err) });
+    return textResult(
+      { error: errorMessage(err) },
+      `jira_submit_verdict 失败: ${errorMessage(err)}`,
+    );
   }
 
   const issueIdOrKey = args.issueIdOrKey;
   if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
-    return textResult({
-      error: "submit_verdict requires a non-empty `issueIdOrKey` (string).",
-    });
+    return textResult(
+      { error: "submit_verdict requires a non-empty `issueIdOrKey` (string)." },
+      "jira_submit_verdict 失败: 缺少 issueIdOrKey",
+    );
   }
   const verdict = args.verdict;
   if (verdict !== "PASS" && verdict !== "FAIL") {
-    return textResult({
-      error: "submit_verdict requires `verdict` to be one of 'PASS' | 'FAIL'.",
-    });
+    return textResult(
+      { error: "submit_verdict requires `verdict` to be one of 'PASS' | 'FAIL'." },
+      "jira_submit_verdict 失败: verdict 必须为 PASS/FAIL",
+    );
   }
   const summary = args.summary;
   if (typeof summary !== "string" || summary.trim().length === 0) {
-    return textResult({
-      error: "submit_verdict requires `summary` (string, non-empty).",
-    });
+    return textResult(
+      { error: "submit_verdict requires `summary` (string, non-empty)." },
+      "jira_submit_verdict 失败: 缺少 summary",
+    );
   }
   const evidence =
     typeof args.evidence === "string" ? args.evidence : "";
@@ -97,10 +117,13 @@ export async function submitVerdict(
     commentSelf = data.self;
   } catch (err) {
     const msg = err instanceof JiraHttpError ? err.message : errorMessage(err);
-    return textResult({
-      error: `jira.submit_verdict (step 1: comment) failed: ${msg}. ` +
-        "Transition was NOT executed. No side effect on the issue.",
-    });
+    return textResult(
+      {
+        error: `jira.submit_verdict (step 1: comment) failed: ${msg}. ` +
+          "Transition was NOT executed. No side effect on the issue.",
+      },
+      `jira_submit_verdict 失败: 评论发布错误 ${msg}`,
+    );
   }
 
   // FAIL → add label + clear assignee (no transition).
@@ -141,18 +164,21 @@ async function escalateAfterComment(
     labelOk = true
   } catch (err) {
     const msg = err instanceof JiraHttpError ? err.message : errorMessage(err)
-    return textResult({
-      ok: false,
-      method: "submit_verdict",
-      partial: true,
-      verdict: "FAIL",
-      comment: { id: commentId, self: commentSelf },
-      error:
-        `jira.submit_verdict (verdict=FAIL, step 2: add label) failed: ${msg}. ` +
-        `Verdict comment was already posted; label was NOT added; assignee NOT cleared. ` +
-        `Re-run submit_verdict with the same args to retry — the comment step is idempotent at ` +
-        `the UI level but will post a duplicate ADF comment on Jira.`,
-    })
+    return textResult(
+      {
+        ok: false,
+        method: "submit_verdict",
+        partial: true,
+        verdict: "FAIL",
+        comment: { id: commentId, self: commentSelf },
+        error:
+          `jira.submit_verdict (verdict=FAIL, step 2: add label) failed: ${msg}. ` +
+          `Verdict comment was already posted; label was NOT added; assignee NOT cleared. ` +
+          `Re-run submit_verdict with the same args to retry — the comment step is idempotent at ` +
+          `the UI level but will post a duplicate ADF comment on Jira.`,
+      },
+      `${issueIdOrKey} 部分完成: 评论已发但 escalated label 添加失败, 见 hint`,
+    )
   }
 
   let assigneeCleared = false
@@ -163,41 +189,36 @@ async function escalateAfterComment(
     assigneeCleared = true
   } catch (err) {
     const msg = err instanceof JiraHttpError ? err.message : errorMessage(err)
-    return textResult({
-      ok: false,
+    return textResult(
+      {
+        ok: false,
+        method: "submit_verdict",
+        partial: true,
+        verdict: "FAIL",
+        comment: { id: commentId, self: commentSelf },
+        label: ESCALATED_LABEL,
+        hint:
+          `Verdict comment + "${ESCALATED_LABEL}" label already applied. To finish, run: ` +
+          `jira { method: "update", args: { issueIdOrKey: "${issueIdOrKey}", fields: { assignee: null } } }`,
+        error:
+          `jira.submit_verdict (verdict=FAIL, step 3: clear assignee) failed: ${msg}. ` +
+          `Comment and label already applied; assignee NOT cleared.`,
+      },
+      `${issueIdOrKey} 部分完成: 评论 + label 已应用但清 assignee 失败, 见 hint`,
+    )
+  }
+
+  return textResult(
+    {
+      ok: true,
       method: "submit_verdict",
-      partial: true,
       verdict: "FAIL",
       comment: { id: commentId, self: commentSelf },
       label: ESCALATED_LABEL,
-      hint:
-        `Verdict comment + "${ESCALATED_LABEL}" label already applied. To finish, run: ` +
-        `jira { method: "update", args: { issueIdOrKey: "${issueIdOrKey}", fields: { assignee: null } } }`,
-      error:
-        `jira.submit_verdict (verdict=FAIL, step 3: clear assignee) failed: ${msg}. ` +
-        `Comment and label already applied; assignee NOT cleared.`,
-    })
-  }
-
-  return textResult({
-    ok: true,
-    method: "submit_verdict",
-    verdict: "FAIL",
-    comment: { id: commentId, self: commentSelf },
-    label: ESCALATED_LABEL,
-    assigneeCleared: true,
-    summary: {
-      key: issueIdOrKey,
-      verdict: "FAIL",
-      commentId,
-      label: ESCALATED_LABEL,
       assigneeCleared: true,
     },
-    hint:
-      `Task failed and was escalated. The "escalated" label signals "human pickup" ` +
-      `to the orchestrator pipeline. Use jira { method: "request_help", ... } if a specific ` +
-      `person should look at it.`,
-  })
+    `${issueIdOrKey} 已 FAIL: escalated 已标 + assignee 已清`,
+  )
 }
 
 /**
@@ -220,84 +241,100 @@ async function completeTransition(
     transitions = Array.isArray(data?.transitions) ? data.transitions : []
   } catch (err) {
     const msg = err instanceof JiraHttpError ? err.message : errorMessage(err)
-    return textResult({
-      ok: false,
-      method: "submit_verdict",
-      partial: true,
-      comment: { id: commentId, self: commentSelf },
-      hint:
-        `Comment was posted (id=${commentId}) but the transition lookup failed: ${msg}. ` +
-        `Re-run the generic \`transition\` method to finish, or retry submit_verdict ` +
-        `if the failure was transient (be aware: this will post a duplicate comment).`,
-      error:
-        `jira.submit_verdict (step 2a: list transitions) failed: ${msg}. ` +
-        `Comment was already posted.`,
-    })
+    return textResult(
+      {
+        ok: false,
+        method: "submit_verdict",
+        partial: true,
+        verdict: "PASS",
+        comment: { id: commentId, self: commentSelf },
+        hint:
+          `Comment was posted (id=${commentId}) but the transition lookup failed: ${msg}. ` +
+          `Re-run the generic \`transition\` method to finish, or retry submit_verdict ` +
+          `if the failure was transient (be aware: this will post a duplicate comment).`,
+        error:
+          `jira.submit_verdict (step 2a: list transitions) failed: ${msg}. ` +
+          `Comment was already posted.`,
+      },
+      `${issueIdOrKey} 部分完成: 评论已发但查 transition 失败, 见 hint`,
+    )
   }
 
   if (transitions.length === 0) {
-    return textResult({
-      ok: false,
-      method: "submit_verdict",
-      partial: true,
-      comment: { id: commentId, self: commentSelf },
-      error:
-        `No transitions available for ${issueIdOrKey} — issue may be in a terminal state. ` +
-        `Comment was already posted.`,
-    })
+    return textResult(
+      {
+        ok: false,
+        method: "submit_verdict",
+        partial: true,
+        verdict: "PASS",
+        comment: { id: commentId, self: commentSelf },
+        error:
+          `No transitions available for ${issueIdOrKey} — issue may be in a terminal state. ` +
+          `Comment was already posted.`,
+      },
+      `${issueIdOrKey} 部分完成: 评论已发但无可用 transition`,
+    )
   }
 
   const { match, matchedBy } = findTransition(transitions, "done");
   if (!match) {
     const available = describeAvailableTransitions(transitions);
-    return textResult({
-      ok: false,
-      method: "submit_verdict",
-      partial: true,
-      comment: { id: commentId, self: commentSelf },
-      error:
-        `No "done" category transition for ${issueIdOrKey}: [${available}]. ` +
-        `Comment was already posted.`,
-      hint: "Available transitions (name [category]): " + available,
-    });
+    return textResult(
+      {
+        ok: false,
+        method: "submit_verdict",
+        partial: true,
+        verdict: "PASS",
+        comment: { id: commentId, self: commentSelf },
+        error:
+          `No "done" category transition for ${issueIdOrKey}: [${available}]. ` +
+          `Comment was already posted.`,
+        hint: "Available transitions (name [category]): " + available,
+      },
+      `${issueIdOrKey} 部分完成: 评论已发但无 done category transition, 见 hint`,
+    );
   }
 
   try {
     await jiraPost(cfg, `issue/${issueIdOrKey}/transitions`, {
       transition: { id: match.id },
     })
-    return textResult({
-      ok: true,
-      method: "submit_verdict",
-      comment: { id: commentId, self: commentSelf },
-      transition: {
-        id: match.id,
-        name: match.name,
-        to: match.to?.name,
-        toCategory: match.to?.statusCategory?.key,
+    const toName = match.to?.name ?? "";
+    const toCategory = match.to?.statusCategory?.key ?? "";
+    return textResult(
+      {
+        ok: true,
+        method: "submit_verdict",
+        verdict: "PASS",
+        comment: { id: commentId, self: commentSelf },
+        transition: {
+          id: match.id,
+          name: match.name,
+          to: toName,
+          toCategory,
+          matchedBy,
+        },
       },
-      summary: {
-        key: issueIdOrKey,
-        verdict,
-        commentId,
-        transitionedTo: match.to?.name,
-        toCategory: match.to?.statusCategory?.key,
-      },
-    })
+      `${issueIdOrKey} 已 PASS: 评论已发 + 转「${toName}」`,
+    )
   } catch (err) {
     const msg = err instanceof JiraHttpError ? err.message : errorMessage(err)
-    return textResult({
-      ok: false,
-      method: "submit_verdict",
-      partial: true,
-      comment: { id: commentId, self: commentSelf },
-      hint:
-        `Comment was posted (id=${commentId}) but the transition execute failed: ${msg}. ` +
-        `Use \`jira_transition\` to move ${issueIdOrKey} to the appropriate done status.`,
-      error:
-        `jira.submit_verdict (step 2b: execute transition) failed: ${msg}. ` +
-        `Comment was already posted.`,
-    })
+    return textResult(
+      {
+        ok: false,
+        method: "submit_verdict",
+        partial: true,
+        verdict: "PASS",
+        comment: { id: commentId, self: commentSelf },
+        hint:
+          `Comment was posted (id=${commentId}) but the transition execute failed: ${msg}. ` +
+          `Use \`jira_transition\` to move ${issueIdOrKey} to the appropriate done status.`,
+        error:
+          `jira.submit_verdict (step 2b: execute transition) failed: ${msg}. ` +
+          `Comment was already posted.`,
+      },
+      `${issueIdOrKey} 部分完成: 评论已发但转态失败, 见 hint`,
+    )
   }
 }
 
