@@ -593,4 +593,96 @@ describe("get default fields whitelist (SSSS-401)", () => {
     expect(summary).not.toMatch(/附件/);
     expect(summary.length).toBeLessThan(100);
   });
+
+  // ---- CP-2676 G7: ATTACHMENT_CAP 20 → 5, moreCount preserved ----
+
+  it("AC-2676-G-20: 8 attachments → issue.attachments length=5 (created desc) + moreCount=3 + attachmentCount=8", async () => {
+    const att = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        id: String(1000 + i),
+        self: `u/${1000 + i}`,
+        filename: `f-${i}.png`,
+        size: 100 + i,
+        mimeType: "image/png",
+        // Older first so sort-by-created-desc picks the last 5.
+        created: `2026-06-${String(1 + i).padStart(2, "0")}T10:00:00.000+0800`,
+        content: `u/${1000 + i}/content`,
+        author: { displayName: "Bob", accountId: "acc-2" },
+      }));
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      ...SAMPLE_ISSUE,
+      fields: { ...SAMPLE_ISSUE.fields, attachment: att(8) },
+    });
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    // Cap is 5 most-recent; raw has 8.
+    expect(parsed.issue.attachments).toHaveLength(5);
+    expect(parsed.issue.attachmentCount).toBe(8);
+    expect(parsed.issue.moreCount).toBe(3);
+
+    // Sort by created desc — the 5 kept should be the newest (2026-06-04..08).
+    const keptDates = (parsed.issue.attachments as Array<{ created: string }>).map(
+      (a) => a.created,
+    );
+    expect(keptDates[0]).toBe("2026-06-08T10:00:00.000+0800");
+    expect(keptDates[4]).toBe("2026-06-04T10:00:00.000+0800");
+
+    // Raw still available under fields.attachment (full 8).
+    expect(parsed.issue.fields.attachment).toHaveLength(8);
+  });
+
+  it("AC-2676-G-21: ≤5 attachments (3) → full list returned, NO moreCount", async () => {
+    const att = [
+      { id: "1", self: "u/1", filename: "a.png", size: 100, mimeType: "image/png", created: "2026-06-15T10:00:00.000+0800", content: "u/1/content", author: { displayName: "Bob", accountId: "acc-2" } },
+      { id: "2", self: "u/2", filename: "b.png", size: 200, mimeType: "image/png", created: "2026-06-14T10:00:00.000+0800", content: "u/2/content", author: { displayName: "Bob", accountId: "acc-2" } },
+      { id: "3", self: "u/3", filename: "c.png", size: 300, mimeType: "image/png", created: "2026-06-13T10:00:00.000+0800", content: "u/3/content", author: { displayName: "Bob", accountId: "acc-2" } },
+    ];
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      ...SAMPLE_ISSUE,
+      fields: { ...SAMPLE_ISSUE.fields, attachment: att },
+    });
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    expect(parsed.issue.attachments).toHaveLength(3);
+    expect(parsed.issue.attachmentCount).toBe(3);
+    // ≤5: no moreCount key on the surface.
+    expect(parsed.issue).not.toHaveProperty("moreCount");
+  });
+
+  it("AC-2676-G-22 (regression guard): >5 with no moreCount / 20-cap residue = FAIL", async () => {
+    // This test asserts the regression shape: if a future refactor
+    // (a) silently caps at 5 with no moreCount, or (b) leaves ATTACHMENT_CAP
+    // at 20, the contract from CP-2676 G7 breaks. We don't rebuild the
+    // whole source — we instead drive the handler with 12 attachments and
+    // require both the slice size (=5) AND the moreCount (=7) to be set.
+    // If either is wrong, the contract regresses and this test fails.
+    const att = Array.from({ length: 12 }, (_, i) => ({
+      id: String(2000 + i),
+      self: `u/${2000 + i}`,
+      filename: `g-${i}.png`,
+      size: 50 + i,
+      mimeType: "image/png",
+      created: `2026-05-${String(1 + i).padStart(2, "0")}T10:00:00.000+0800`,
+      content: `u/${2000 + i}/content`,
+      author: { displayName: "Bob", accountId: "acc-2" },
+    }));
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      ...SAMPLE_ISSUE,
+      fields: { ...SAMPLE_ISSUE.fields, attachment: att },
+    });
+
+    const result = await get({ issueIdOrKey: "TEST-1" });
+    const parsed = JSON.parse(result.content[0].text as string);
+
+    // CP-2676 G7 contract: cap=5 (NOT 20), moreCount is the overflow.
+    expect(parsed.issue.attachments).toHaveLength(5);
+    expect(parsed.issue.attachmentCount).toBe(12);
+    expect(parsed.issue.moreCount).toBe(7);
+    // Raw preserved at full count.
+    expect(parsed.issue.fields.attachment).toHaveLength(12);
+  });
 });

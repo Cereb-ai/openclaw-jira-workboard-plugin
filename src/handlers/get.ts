@@ -62,7 +62,7 @@ import type { ToolResult } from "../types.js";
  *  Anything not in this list requires explicit `fields` opt-in.
  *
  *  13th field (0.5.0+): `attachment` is included so agents can see
- *  attachment metadata without an extra call. Cap is 20 most-recent
+ *  attachment metadata without an extra call. Cap is 5 most-recent
  *  (see ATTACHMENT_CAP); if more exist, the response includes
  *  `moreCount: N` so the agent can call jira_list_attachments for the
  *  full list.
@@ -101,7 +101,7 @@ const DEFAULT_FIELDS = [
 /** Max attachments returned by jira_get by default. The rest are NOT
  *  truncated silently — instead `moreCount: N` is included so the agent
  *  knows to call jira_list_attachments for the full list. */
-const ATTACHMENT_CAP = 20;
+const ATTACHMENT_CAP = 5;
 
 /** Strip author.avatarUrls (~600B/att) from the surface to keep
  *  jira_get responses small. The full attachment is still available
@@ -281,9 +281,10 @@ export async function get(args: Record<string, unknown>): Promise<ToolResult> {
         ? (f.parent as { key?: string; fields?: { summary?: string } })
         : undefined;
 
-    // Compact the attachment list: cap at 20 most-recent + strip avatarUrls.
+    // Compact the attachment list: cap at 5 most-recent + strip avatarUrls.
     // The raw `attachment` field is still available under `fields.attachment`
-    // for callers that need the full list. (CP-2384 didn't touch attachments.)
+    // for callers that need the full list. (CP-2384 didn't touch attachments;
+    // CP-2676 G7 tightened the cap from 20 → 5 to keep default payloads tiny.)
     const rawAtt = Array.isArray(f.attachment) ? (f.attachment as Record<string, unknown>[]) : [];
     const sortedAtt = [...rawAtt].sort((a, b) =>
       String(b.created ?? "").localeCompare(String(a.created ?? "")),
@@ -348,7 +349,7 @@ export async function get(args: Record<string, unknown>): Promise<ToolResult> {
           issuelinks: compactIssuelinks,
           // CP-2669 G2: plain text (adfToPlainText), NOT ADF doc.
           description: descriptionText,
-          // 20 most-recent attachments (sorted by created desc, avatarUrls
+          // 5 most-recent attachments (sorted by created desc, avatarUrls
           // stripped). `attachmentCount` is the total; `moreCount` is set when
           // we hit the cap — agent should call jira_list_attachments for the
           // full list. Use `jira_get { fields: ['attachment'] }` to bypass

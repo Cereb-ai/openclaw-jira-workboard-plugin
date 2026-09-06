@@ -77,7 +77,7 @@ export default defineToolPlugin({
       name: "jira_get",
       label: "Jira Get",
       description:
-        "Read single ticket details by key (e.g. 'WTO-100'). Default fetches only a whitelisted set of 13 fields (summary/status/issuetype/priority/labels/assignee/reporter/created/updated/parent/description/issuelinks/attachment) — this excludes the heavy `comment` and `worklog` sub-resources (5-50 KB per call). Pass `fields: ['*all']` for the full payload, or a specific list like `['customfield_10019']` to scope to one field. Comments should be fetched separately via jira_list_comments. CP-2669: `issue.description` is plain text (not ADF); raw ADF stays accessible under `issue.fields.description`. `details` on the result is a <100-char one-line summary.",
+        "Read single ticket details by key (e.g. 'WTO-100'). Default fetches only a whitelisted set of 13 fields (summary/status/issuetype/priority/labels/assignee/reporter/created/updated/parent/description/issuelinks/attachment) — this excludes the heavy `comment` and `worklog` sub-resources (5-50 KB per call). Pass `fields: ['*all']` for the full payload, or a specific list like `['customfield_10019']` to scope to one field. Comments should be fetched separately via jira_list_comments. Attachments: default returns the 5 most-recent; if more exist the response includes `moreCount: N` (and `attachmentCount` is the total) — call jira_list_attachments for the full list. CP-2669: `issue.description` is plain text (not ADF); raw ADF stays accessible under `issue.fields.description`. `details` on the result is a <100-char one-line summary.",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Issue key like 'WTO-100'" }),
         fields: Type.Optional(

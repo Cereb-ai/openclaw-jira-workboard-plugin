@@ -56,7 +56,7 @@ jira-tool --help
 | tool | 用途 | 必填 | 常用选填 |
 |---|---|---|---|
 | `jira_search` | JQL 搜索 (默认 30 条) | `jql` | `maxResults`, `fields` |
-| `jira_get` | 读单 ticket 详情 (默认走白名单, 含 attachment 最新 20 个) | `issueIdOrKey` | `fields` |
+| `jira_get` | 读单 ticket 详情 (默认走白名单, 含 attachment 最新 5 个) | `issueIdOrKey` | `fields` |
 | `jira_list_comments` | 拉 ticket 全部评论 (ADF → 纯文本 + mentions) | `issueIdOrKey` | `startAt`, `maxResults` (≤100), `orderBy`, `since` (ISO date, 客户端 filter), `authorAccountId` (客户端 filter) |
 | `jira_get_comment` | 读单条评论 (ADF → 纯文本 + mentions) | `issueIdOrKey`, `commentId` | — |
 | `jira_comment` | 给 ticket 加评论 (**纯文本 string**) | `issueIdOrKey`, `body` (string) | `mentionAccountIds` (string[] of accountIds) |
@@ -210,7 +210,7 @@ assignee, reporter, created, updated, parent, description,
 issuelinks, attachment
 ```
 
-白名单**排除** `comment` / `worklog` 等重资源 (`attachment` 已加, 默认 cap 20 条). 实测对比 `*navigable` 默认集, 一个 long-lived ticket 可以从 30+ KB 砍到 1-3 KB.
+白名单**排除** `comment` / `worklog` 等重资源 (`attachment` 已加, 默认 cap 5 条). 实测对比 `*navigable` 默认集, 一个 long-lived ticket 可以从 30+ KB 砍到 1-3 KB.
 
 **为什么走服务端 query 而不是 client-side filter**: Atlassian wire payload 在我们 formatter 跑之前就开始烧 token 了, 客户端裁剪救不了 wire cost. 唯一靠谱的省点是 `fields` query param.
 
@@ -304,9 +304,9 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 | `issue.parent` | `{key, summary} \| null` | 父 ticket 标识 (subtask 时有) |
 | `issue.issuelinks` | `{blocks, blockedBy}` | **CP-2384 新 shape**: 见下 |
 | `issue.description` | `string \| null` | **CP-2669 G2**: 纯文本 (adfToPlainText), **不是 ADF doc**; 原始 ADF 仍可通过 `issue.fields.description` 读取 |
-| `issue.attachments[]` | `attachment[]` | 最近 20 个附件 metadata |
+| `issue.attachments[]` | `attachment[]` | 最近 5 个附件 metadata |
 | `issue.attachmentCount` | `number` | 总附件数 |
-| `issue.moreCount?` | `number` | 超出 20 cap 的剩余数 |
+| `issue.moreCount?` | `number` | 超出 5 cap 的剩余数 |
 | `issue.fields` | `object` | 原始 fields 字典 (callers 想 drill in 用 `fields:['*all']` 拿全量) |
 
 **`issue.issuelinks` 结构 (CP-2384 AC1)**:
