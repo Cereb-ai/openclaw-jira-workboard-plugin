@@ -58,7 +58,7 @@ export default defineToolPlugin({
       name: "jira_search",
       label: "Jira Search",
       description:
-        "JQL search. Default 30 results. Returns matching tickets with summary/status/labels/created/parent.",
+        "JQL search. Default 30 results. Returns {ok, method, request{jql}, total, count, issues[]}. Each issue is whitelisted to 8 fields: key/id/summary/status/issuetype/labels/created/parent. total = JQL 命中总数, count = 本次返回条数. fields 参数仅用于服务端收窄拉取 (降 token), 返回字段集固定不变; 需要 description / customfield_* 等白名单外字段 → 用 jira_get 单票获取. details = <100 字符一句话摘要.",
       parameters: Type.Object({
         jql: Type.String({ description: "JQL query string" }),
         maxResults: Type.Optional(
@@ -150,7 +150,7 @@ export default defineToolPlugin({
       name: "jira_comment",
       label: "Jira Comment",
       description:
-        "Add a plain-text comment to a ticket. Body is a string — NOT ADF. Plugin auto-wraps into ADF internally. Use `\\n` for line breaks. Optional `mentionAccountIds` to @mention users (string[] of accountIds).",
+        "Add a plain-text comment (auto ADF wrap). Returns {ok, method, request{issueIdOrKey, mentions, bodyChars}, comment{id, self, created}}. The comment body is NOT echoed (bodyChars only). details = one-line summary.",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Issue key" }),
         body: Type.String({ description: "Comment body (plain text). Use \\n for line breaks. Plugin auto-wraps to ADF." }),
@@ -169,7 +169,7 @@ export default defineToolPlugin({
       name: "jira_create_task",
       label: "Jira Create Task",
       description:
-        "Create a main task. Locks template + plan label + assignee + optional block. requirements / scope / acceptance_criteria are 3 plain-text strings (NOT ADF dict, NOT arrays) — plugin wraps them into the 3-section description template. scope (按 labels.md 写 ✅/❌ 负责) 必填.",
+        "Create a main task (locks template + plan label + optional assignee/block). requirements/scope/acceptance_criteria are 3 plain-text strings wrapped into the 3-section description template; text is NOT echoed. Returns {ok, method, request{project, summary, labels}, issue{id, key, self}, block?, block_errors?}. details = one-line summary.",
       parameters: Type.Object({
         project: Type.String({ description: "Project key, e.g. 'WTO'" }),
         summary: Type.String({ description: "Task summary" }),
@@ -209,7 +209,7 @@ export default defineToolPlugin({
       name: "jira_create_subtask",
       label: "Jira Create Subtask",
       description:
-        "Create a subtask under parent. Locks template + label + assignee + optional block. requirements / scope / acceptance_criteria are 3 plain-text strings (NOT ADF dict, NOT arrays). scope 必填. labels 必填 (no default).",
+        "Create a subtask under parent (locks template + label + assignee + optional block). Returns {ok, method, request{parent, summary, labels}, issue{id, key, self}, block?, block_errors?}. requirements/scope/acceptance_criteria text is NOT echoed. details = one-line summary.",
       parameters: Type.Object({
         project: Type.String({ description: "Project key" }),
         parent: Type.String({ description: "Parent issue key" }),

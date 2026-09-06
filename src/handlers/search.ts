@@ -13,8 +13,17 @@
  *   ["summary","status","issuetype","labels","created","parent"]
  * Default maxResults: 30.
  *
- * Out: a text-formatted table for human/LLM use, plus the raw JSON in `details.issues`
- * so downstream tool calls can re-use the data without re-fetching.
+ * `fields` 参数语义 (CP-2693 batch 1, v0.5 提案 RRmzJTZ7Q8 §1 search 条目):
+ *   - fields 仅作为**服务端拉取收窄**使用 (降 wire token), 返回字段集固定为
+ *     `formatIssues` 输出的 8 字段 (key/id/summary/status/issuetype/labels/
+ *     created/parent).
+ *   - 显式传白名单外字段 (如 `["description"]` / `["customfield_*"]`) **不会**
+ *     扩展返回 — 格式器只接受 8 字段. 这是已知简化: 需要 description 或
+ *     customfield_* 等白名单外字段时, 走 `jira_get { fields: [...] }` 单票
+ *     逃生舱 (jira_get 的 fields 参数与 jira_search 不同, 那里是真实逃生舱).
+ *
+ * Out: text-formatted slim envelope + `details` = <100-char one-line summary
+ * (e.g. `"JQL 命中 12 票, 本次返回 3 票"`). 响应 content 仍含完整 issues[].
  */
 import { loadConfig } from "../auth.js";
 import { jiraGet, JiraHttpError } from "../http.js";
@@ -35,14 +44,15 @@ export async function search(args: Record<string, unknown>): Promise<ToolResult>
   try {
     cfg = loadConfig();
   } catch (err) {
-    return textResult({ error: errorMessage(err) });
+    return textResult({ error: errorMessage(err) }, `jira_search 失败: ${errorMessage(err)}`);
   }
 
   const jql = args.jql;
   if (typeof jql !== "string" || jql.trim().length === 0) {
-    return textResult({
-      error: "search requires a non-empty `jql` (string) argument.",
-    });
+    return textResult(
+      { error: "search requires a non-empty `jql` (string) argument." },
+      "jira_search 失败: 缺 jql",
+    );
   }
   const maxResults =
     typeof args.maxResults === "number" && Number.isFinite(args.maxResults)
@@ -60,22 +70,39 @@ export async function search(args: Record<string, unknown>): Promise<ToolResult>
     })) as { issues?: unknown[]; total?: number; startAt?: number };
 
     const issues = Array.isArray(data?.issues) ? data.issues : [];
-    return textResult({
-      ok: true,
-      method: "search",
-      // CP-2384 AC2: echo only key-class JQL — agents don't need the
-      // echoed fields list / maxResults back (they just sent them).
-      request: { jql },
-      total: data?.total ?? issues.length,
-      count: issues.length,
-      issues: formatIssues(issues),
-    });
+    const total = data?.total ?? issues.length;
+    return textResult(
+      {
+        ok: true,
+        method: "search",
+        // CP-2384 AC2: echo only key-class JQL — agents don't need the
+        // echoed fields list / maxResults back (they just sent them).
+        request: { jql },
+        total,
+        count: issues.length,
+        issues: formatIssues(issues),
+      },
+      searchDetailsSummary(total, issues.length),
+    );
   } catch (err) {
     if (err instanceof JiraHttpError) {
-      return textResult({ error: `jira.search failed: ${err.message}` });
+      return textResult(
+        { error: `jira.search failed: ${err.message}` },
+        `jira_search 失败: HTTP ${err.status} ${err.statusText}`,
+      );
     }
-    return textResult({ error: `jira.search failed: ${errorMessage(err)}` });
+    return textResult(
+      { error: `jira.search failed: ${errorMessage(err)}` },
+      `jira_search 失败: ${errorMessage(err)}`,
+    );
   }
+}
+
+function searchDetailsSummary(total: number, returned: number): string {
+  // total = JQL 命中总数 (server-side). returned = 本次返回条数 (无客户端 filter).
+  // 无客户端 filter 时 total === returned, 此处仍按"命中 X, 返回 Y"格式输出, 让
+  // agent 一眼判断是否需要收窄 JQL.
+  return `JQL 命中 ${total} 票, 本次返回 ${returned} 票`;
 }
 
 function formatIssues(issues: unknown[]): unknown[] {

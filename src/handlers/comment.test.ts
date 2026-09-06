@@ -1,17 +1,20 @@
 /**
  * comment handler tests — CP-2384 AC2 (request echo strip body), AC4 (return
- * field contract preservation: comment.id/self/created + summary).
+ * field contract: comment.id/self/created), CP-2693 batch 1 (details summary
+ * + summary block removal).
  *
  * Coverage:
- *   - Happy path: posting a comment returns comment.id/self/created and a
- *     summary with key/commentId/url; request.body is NOT echoed.
+ *   - Happy path: posting a comment returns comment.id/self/created; old
+ *     `summary{key,commentId,url}` block REMOVED (CP-2693 batch 1, v0.5 草稿池
+ *     落地去 summary). request.body is NOT echoed.
  *   - Validation: missing issueIdOrKey, missing body, empty body, body
  *     not-a-string.
  *   - mentionAccountIds are stripped down to account IDs (no @displayName
  *     needed); kept under `request.mentions`.
  *   - bodyChars carries the original length so the agent can sanity-check
  *     truncation locally.
- *   - 401 / network errors surface as error envelopes.
+ *   - details: <100-char one-line summary string (NOT the full structured
+ *     object). 401 / network errors also surface slim details.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -51,7 +54,7 @@ describe("comment (CP-2384)", () => {
     vi.clearAllMocks();
   });
 
-  it("AC-2384-C-1: happy path — comment.id/self/created + summary preserved (CP-2384 AC4)", async () => {
+  it("AC-2384-C-1: happy path — comment.id/self/created preserved (CP-2384 AC4) + summary block REMOVED (CP-2693 batch 1)", async () => {
     vi.mocked(jiraPost).mockResolvedValueOnce({
       id: "10001",
       self: "https://example.atlassian.net/rest/api/3/issue/TEST-1/comment/10001",
@@ -72,12 +75,16 @@ describe("comment (CP-2384)", () => {
       self: "https://example.atlassian.net/rest/api/3/issue/TEST-1/comment/10001",
       created: "2026-06-15T10:00:00.000+0800",
     });
-    // summary.* fields preserved.
-    expect(parsed.summary).toEqual({
-      key: "TEST-1",
-      commentId: "10001",
-      url: "https://example.atlassian.net/rest/api/3/issue/TEST-1/comment/10001",
-    });
+    // CP-2693 batch 1: summary block REMOVED (key/commentId/url all duplicated
+    // request.issueIdOrKey / comment.id / comment.self — v0.5 草稿池落地).
+    expect(parsed).not.toHaveProperty("summary");
+    // CP-2693 batch 1: details is a <100-char one-line summary string.
+    expect(typeof result.details).toBe("string");
+    const details = result.details as string;
+    expect(details.length).toBeLessThan(100);
+    expect(details).toMatch(/TEST-1/);
+    expect(details).toMatch(/10001/);
+    expect(details).toMatch(/已评论/);
   });
 
   it("AC-2384-C-2: request body is NOT echoed (CP-2384 AC2 echo strip)", async () => {
@@ -156,6 +163,9 @@ describe("comment (CP-2384)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.error).toMatch(/issueIdOrKey/);
     expect(jiraPost).not.toHaveBeenCalled();
+    // CP-2693 batch 1: error paths also surface slim details.
+    expect(typeof result.details).toBe("string");
+    expect((result.details as string).length).toBeLessThan(100);
   });
 
   it("AC-2384-C-6: rejects missing body", async () => {
@@ -163,6 +173,8 @@ describe("comment (CP-2384)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.error).toMatch(/body.*plain string/);
     expect(jiraPost).not.toHaveBeenCalled();
+    expect(typeof result.details).toBe("string");
+    expect((result.details as string).length).toBeLessThan(100);
   });
 
   it("AC-2384-C-7: rejects empty body", async () => {
@@ -170,6 +182,8 @@ describe("comment (CP-2384)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.error).toMatch(/body.*non-empty/);
     expect(jiraPost).not.toHaveBeenCalled();
+    expect(typeof result.details).toBe("string");
+    expect((result.details as string).length).toBeLessThan(100);
   });
 
   it("AC-2384-C-8: 401 upstream surfaces as error envelope with status + body preserved", async () => {
@@ -181,5 +195,8 @@ describe("comment (CP-2384)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.error).toMatch(/jira\.comment failed/);
     expect(parsed.error).toMatch(/HTTP 401/);
+    // CP-2693 batch 1: error paths also have slim details.
+    expect(typeof result.details).toBe("string");
+    expect((result.details as string).length).toBeLessThan(100);
   });
 });

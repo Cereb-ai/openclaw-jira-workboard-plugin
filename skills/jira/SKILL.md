@@ -272,16 +272,22 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 
 ---
 
-## 返回字段契约 (CP-2384, 0.5.2+; CP-2669, 0.6.0)
+## 返回字段契约 (CP-2384, 0.5.2+; CP-2669, 0.6.0; CP-2693 batch 1)
 
 5 个高频工具 (jira_get / jira_list_comments / jira_comment / jira_search / jira_create_subtask) 的返回字段做了统一裁剪: **agent 自己传入的请求参数不回显** (key 类标识除外), **产物标识 / 错误原因完整保留**, 反结果反馈 (block 状态) 字段不动. 下表是逐字段契约, 与实现 `src/handlers/*.ts` 逐字段一致.
 
 > **裁剪原则**: 请求回声 (agent 刚发的请求参数原样回显) 视为回声噪声, 裁掉; key 类标识 (issueIdOrKey / jql / parent / accountId 等) 是 agent 标识后续 ticket 的锚, 保留; 服务端产物标识 (issue.key/id/self、comment.id/self/created) 是 agent 后续 follow-up 的依据, 保留; 错误原因 (HTTP status + message) 必须完整保留, 禁止静默.
 >
-> **CP-2669 G1 附加**: `ToolResult.details` (放在 content 之外的那份) 改为 **<100 字符一句话语义摘要**, 不再默认回填全量 `data`. 两个试点工具 (jira_get / jira_list_comments) 显式传入摘要; 其余 12 个工具保持旧行为 (单参 textResult → details 默认 = content). 摘要样例:
+> **CP-2669 G1 + CP-2693 batch 1 推广**: `ToolResult.details` (放在 content 之外的那份) 改为 **<100 字符一句话语义摘要**, 不再默认回填全量 `data`. 试点两工具 (jira_get / jira_list_comments) 沿用 G1; **CP-2693 batch 1** 把 4 个高频工具 (jira_search / jira_comment / jira_create_task / jira_create_subtask) 显式传入语义摘要; 其余 8 个工具 (批 2-4 域) 仍按旧行为 (单参 textResult → details 默认 = content). 摘要样例:
 > - jira_get 成功: `"成功获取 CP-2667: 标题, N 附件"`
 > - jira_list_comments 成功: `"CP-2667 共 25 条评论, 本次返回 10 条 (→10 翻页)"`
-> - 错误: `"jira_get 失败: HTTP 404 Not Found"`
+> - jira_search 成功: `"JQL 命中 12 票, 本次返回 3 票"`
+> - jira_comment 成功: `"已评论 CP-2690: 评论 22475 发布成功"`
+> - jira_create_task 成功: `"成功创建主任务 CP-2691: <summary 前截断>"`
+> - jira_create_subtask 成功: `"成功创建子任务 CP-2695 (父 CP-2690): <summary 前截断>"`
+> - 错误 (全部高频工具): `"<tool_name> 失败: HTTP <status> <statusText>"` / `"<tool_name> 失败: <原因>"`
+>
+> **CP-2693 batch 1 — 回声裁剪 + summary 去重推进**: `jira_create_task` 同步 `jira_create_subtask` 模式 (`request: {fields}` → `{project, summary, labels}`); `jira_comment` 旧 `summary{key, commentId, url}` 块去除; `jira_create_subtask` 旧顶层 `parent` 与 `summary{key, id, url, parent}` 块去除. 详见各工具小节.
 
 ### `jira_get` 返回契约
 
@@ -360,7 +366,7 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 - 有剩余: `"CP-2667 共 25 条评论, 本次返回 10 条 (→10 翻页)"`
 - 无剩余: `"CP-2667 共 8 条评论, 本次返回 8 条"`
 
-### `jira_comment` 返回契约
+### `jira_comment` 返回契约 (CP-2693 batch 1 精简后)
 
 | 字段 | 类型 | 含义 |
 |---|---|---|
@@ -372,13 +378,12 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 | `comment.id` | `string` | 新建评论 id |
 | `comment.self` | `string` | 评论 REST URL |
 | `comment.created` | `string` | 评论创建时间 |
-| `summary.key` | `string` | ticket key |
-| `summary.commentId` | `string` | 同 `comment.id` |
-| `summary.url` | `string` | 同 `comment.self` |
 
 **CP-2384 反断言**: **不回显** body 原文 (`request.body` 字段不存在); 错误路径 (`error`) 完整保留 HTTP status / message. `bodyChars` 让 agent 自检长度但不回显原文.
 
-### `jira_search` 返回契约
+**CP-2693 batch 1**: 旧 `summary{key, commentId, url}` 块去除 (key/commentId/url 都与 request.issueIdOrKey / comment.id / comment.self 重复, 按 v0.5 草稿池落地). `details` = <100 字符一句话摘要, 例 `已评论 CP-2690: 评论 22475 发布成功`.
+
+### `jira_search` 返回契约 (CP-2693 batch 1 fields silent-drop 修正)
 
 | 字段 | 类型 | 含义 |
 |---|---|---|
@@ -389,7 +394,7 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 | `count` | `number` | 本次返回条数 |
 | `issues[]` | `issue[]` | 见下 |
 
-**`issues[]` 每条结构**:
+**`issues[]` 每条结构 (固定 8 字段白名单)**:
 
 | 字段 | 类型 | 备注 |
 |---|---|---|
@@ -402,9 +407,28 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 | `created` | `string` | |
 | `parent` | `string?` | parent key (subtask 时) |
 
-**CP-2384 说明**: 默认 `fields` **去掉** `issuelinks` (search callers 一般只需要 triage 元数据, issuelinks 留给 `jira_get` 按需拉); caller 显式传 `fields: ["issuelinks"]` 仍可拿; 请求回声只留 `jql`, 砍 `maxResults` / `fields` 字段.
+**CP-2384 说明**: 默认 `fields` **去掉** `issuelinks` (search callers 一般只需要 triage 元数据, issuelinks 留给 `jira_get` 按需拉); 请求回声只留 `jql`, 砍 `maxResults` / `fields` 字段.
 
-### `jira_create_subtask` 返回契约
+**CP-2693 batch 1 — `fields` silent-drop 修正**: `fields` 参数**仅用于服务端收窄拉取** (降 wire token); 显式传白名单外字段 (如 `["description"]` / `["customfield_*"]`) **不会**扩展返回 — formatIssues 固定只输出 8 字段. 需要 description / customfield_* 等白名单外字段 → 调 `jira_get { fields: [...] }` 单票逃生舱. `details` = <100 字符一句话摘要, 例 `JQL 命中 12 票, 本次返回 3 票`.
+
+### `jira_create_task` 返回契约 (CP-2693 batch 1 新增)
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `ok` | `true` | 成功标记 |
+| `method` | `"create_task"` | 方法名 |
+| `request.project` | `string` | 项目 key |
+| `request.summary` | `string` | 主任务标题 |
+| `request.labels` | `string[]` | 实际生效 labels (含自动加的 `plan`) |
+| `issue.id` | `string` | 新建主任务 Atlassian id |
+| `issue.key` | `string` | 新建主任务 key |
+| `issue.self` | `string` | 新建主任务 REST URL |
+| `block?` | `[{direction, keys}]` | 0.5.2+ block 计划 (有传 `block` 时) |
+| `block_errors?` | `string[]` | 0.5.2+ block 失败列表 |
+
+**CP-2693 batch 1**: `request: {fields}` 全量回声去除 (12 工具单点最大冗余 — 含 `buildTaskDescription` 渲染的 ADF description 1-3KB+, 完全就是 agent 自己的输入 bounce back). 对齐 `create_subtask` CP-2384 已拍板模式, 只留 key 类 `project` / `summary` / `labels`. 旧 `summary{key, id, url}` 块去除 (`issue{key, id, self}` 已覆盖). **`block` / `block_errors` 结果反馈完整保留** — CP-2384 反断言. `details` = <100 字符一句话摘要, 例 `成功创建主任务 CP-2691: <summary 前截断>`.
+
+### `jira_create_subtask` 返回契约 (CP-2693 batch 1 精简后)
 
 | 字段 | 类型 | 含义 |
 |---|---|---|
@@ -416,21 +440,19 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 | `issue.id` | `string` | 新建 subtask 的 Atlassian id |
 | `issue.key` | `string` | 新建 subtask 的 key |
 | `issue.self` | `string` | 新建 subtask 的 REST URL |
-| `parent` | `string` | 父 ticket key |
-| `summary.key` | `string` | 新建 subtask key |
-| `summary.id` | `string` | 新建 subtask id |
-| `summary.url` | `string` | 新建 subtask self |
-| `summary.parent` | `string` | 父 ticket key |
 | `block?` | `[{direction, keys}]` | 0.3.1+ block 计划 (有传 `block` 时) |
 | `block_errors?` | `string[]` | 0.3.1+ block 失败列表 |
 
 **CP-2384 说明**: 请求回声从 `request: {fields: <full ADF>}` 砍到 `{parent, summary, labels}` 3 字段, requirements / scope / acceptance_criteria 全文不再回显. **block 反馈 (`block` / `block_errors`) 完整保留** — CP-2384 不裁结果反馈.
 
+**CP-2693 batch 1**: 旧顶层 `parent` 与 `summary{key, id, url, parent}` 块去除 (与 `request.parent` / `issue{key, id, self}` 重复), 与 `create_task` 同构收敛, 留 `request.parent` 为锚. `details` = <100 字符一句话摘要, 例 `成功创建子任务 CP-2695 (父 CP-2690): <summary 前截断>`.
+
 ### 反断言 (本次不动)
 
-- **低频工具返回结构未改**: verdict / transition / abandon / upload_attachment / get_comment / list_attachments / get_attachment / create_task / request_help / list_attachments 等.
-- **`fields` 全量仍可用**: 调 `jira_get { fields: ['*all'] }` 后, `parsed.issue.fields.issuelinks` 仍是原数组 (旧 `{id, type, inwardIssue, outwardIssue}` 形状); 想 follow-up 拿到原 shape 不影响.
-- **错误路径仍走 `error` 字段**: 5 个工具任何 4xx / 5xx / 网络错 都返回 `{error: "jira.<method> failed: ..."}`, **不**走 result feedback 路径.
+- **低频工具返回结构未改**: verdict / transition / abandon / upload_attachment / get_comment / list_attachments / get_attachment / request_help 等 (归批 2-4 域, 本批未触碰).
+- **`jira_get` 的 `fields` 全量仍可用**: 调 `jira_get { fields: ['*all'] }` 后, `parsed.issue.fields.issuelinks` 仍是原数组 (旧 `{id, type, inwardIssue, outwardIssue}` 形状); 想 follow-up 拿到原 shape 不影响. **本批 (CP-2693 batch 1) 不动 `jira_get` 的 `fields` 逃生舱语义**, 仅修正 `jira_search` 的 silent-drop 声明矛盾 (见上文).
+- **`jira_search` 的 `fields` 仅服务端收窄, 不扩展返回集**: 显式传 `["description"]` / `["customfield_*"]` 等白名单外字段会被静默丢弃 (formatIssues 固定 8 字段). 需要这些字段 → 走 `jira_get { fields: [...] }` 单票逃生舱.
+- **错误路径仍走 `error` 字段**: 5 个高频工具任何 4xx / 5xx / 网络错 都返回 `{error: "jira.<method> failed: ..."}`, **不**走 result feedback 路径.
 
 ---
 
