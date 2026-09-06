@@ -134,7 +134,7 @@ export default defineToolPlugin({
       name: "jira_get_comment",
       label: "Jira Get Comment",
       description:
-        "Read a single comment by id. Both issueIdOrKey AND commentId are required. Body is rendered to plain text (no ADF).",
+        "Read a single comment by id. Both issueIdOrKey AND commentId are required. Body is rendered to plain text (NEVER truncated — this is the full-text escape hatch for jira_list_comments' 500-char cap; no ADF). Returns {ok, method, request{issueIdOrKey, commentId}, comment{id, author{displayName, accountId}, created, updated, body, mentions}}. author.accountId is preserved for downstream mention routing. details = <100-char one-line summary.",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Issue key" }),
         commentId: Type.String({
@@ -324,7 +324,7 @@ export default defineToolPlugin({
       name: "jira_list_attachments",
       label: "Jira List Attachments",
       description:
-        "List ALL attachment metadata on a ticket (no cap). Use when jira_get's `moreCount: N` indicates there are unlisted attachments, or when you need a full enumeration. Returns [{id, filename, size, mimeType, content URL, thumbnail URL, author, created}, ...]. NO file content — use jira_get_attachment for the actual bytes.",
+        "List ALL attachment metadata on a ticket (no cap — this is the full-enumeration escape hatch for jira_get's 5-attachment cap). Use when jira_get's `moreCount: N` indicates there are unlisted attachments, or when you need a complete list. Returns {ok, method, request{issueIdOrKey}, count, attachments[]}; each attachment is {id, self, filename, size, mimeType, created, content, thumbnail, author{displayName, accountId}} (compact form, avatarUrls stripped). NO file content — use jira_get_attachment for the actual bytes. details = <100-char one-line summary.",
       parameters: Type.Object({
         issueIdOrKey: Type.String({ description: "Issue key like 'SSSS-432'" }),
       }),
