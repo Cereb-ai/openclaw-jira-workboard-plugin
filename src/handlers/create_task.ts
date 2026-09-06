@@ -25,6 +25,15 @@
  *   block.blockedBy: string[] — these tickets block the new main task
  * Both directions are optional and independent. Block failures are reported
  * but do not rollback the created task.
+ *
+ * 返回结构 (CP-2693 batch 1, v0.5 提案 RRmzJTZ7Q8 §8 create_task 条目):
+ *   {ok, method, request{project, summary, labels}, issue{id, key, self}, block?, block_errors?}
+ *   - `request: {fields}` 全量回声去除 (对齐 create_subtask CP-2384 已拍板模式,
+ *     fields 含 buildTaskDescription 渲染的 ADF description 1-3KB+, 是 12 工具
+ *     单点最大冗余)
+ *   - `summary{key, id, url}` 块去除 (issue{key, id, self} 已覆盖)
+ *   - `block` / `block_errors` 结果反馈完整保留 (CP-2384 反断言)
+ *   - `details` = <100 字符一句话摘要 (e.g. `成功创建主任务 CP-2691: <summary 前截断>`)
  */
 import { loadConfig } from "../auth.js";
 import { jiraPost, JiraHttpError } from "../http.js";
@@ -44,67 +53,87 @@ export async function createTask(
   try {
     cfg = loadConfig();
   } catch (err) {
-    return textResult({ error: errorMessage(err) });
+    return textResult(
+      { error: errorMessage(err) },
+      `jira_create_task 失败: ${errorMessage(err)}`,
+    );
   }
 
   // project is the only "context" field the caller still has to pass.
   // Template / structure / assignee / labels are all locked below.
   const project = args.project;
   if (typeof project !== "string" || project.trim().length === 0) {
-    return textResult({
-      error: "create_task requires `project` (string, project key, e.g. 'WTO').",
-    });
+    return textResult(
+      { error: "create_task requires `project` (string, project key, e.g. 'WTO')." },
+      "jira_create_task 失败: 缺 project",
+    );
   }
   const summary = args.summary;
   if (typeof summary !== "string" || summary.trim().length === 0) {
-    return textResult({
-      error: "create_task requires `summary` (string, non-empty).",
-    });
+    return textResult(
+      { error: "create_task requires `summary` (string, non-empty)." },
+      "jira_create_task 失败: 缺 summary",
+    );
   }
   const requirements = args.requirements;
   if (typeof requirements !== "string" || requirements.trim().length === 0) {
-    return textResult({
-      error:
-        "create_task requires `requirements` (plain text string, non-empty). " +
-        "3 fields (requirements / scope / acceptance_criteria) are all plain " +
-        "text strings — NOT ADF dict, NOT arrays. See skills/jira/SKILL.md.",
-    });
+    return textResult(
+      {
+        error:
+          "create_task requires `requirements` (plain text string, non-empty). " +
+          "3 fields (requirements / scope / acceptance_criteria) are all plain " +
+          "text strings — NOT ADF dict, NOT arrays. See skills/jira/SKILL.md.",
+      },
+      "jira_create_task 失败: 缺 requirements",
+    );
   }
   // requirements 字段粒度 sanity check — 防 caller 把整 ticket doc 塞进 requirements
   if (requirements.length > 600) {
-    return textResult({
-      error: `requirements 字段长度 ${requirements.length} > 600。` +
-        `它是"任务说明"section,不是整个 ticket doc。` +
-        `长背景 / 选型理由 → wiki;scope/AC → 对应字段。` +
-        `Runbook 引用 → 📖 参考 Runbook：[title §X](url) 格式（详见 task-creator SKILL.md）。`,
-    });
+    return textResult(
+      {
+        error: `requirements 字段长度 ${requirements.length} > 600。` +
+          `它是"任务说明"section,不是整个 ticket doc。` +
+          `长背景 / 选型理由 → wiki;scope/AC → 对应字段。` +
+          `Runbook 引用 → 📖 参考 Runbook：[title §X](url) 格式（详见 task-creator SKILL.md）。`,
+      },
+      "jira_create_task 失败: requirements > 600 字符",
+    );
   }
   if (/\*\*断言\*\*|AC\d+:|✅ 负责|❌ 不负责/.test(requirements)) {
-    return textResult({
-      error: `requirements 字段含疑似 AC 或 Scope 内容（"**断言**" / "AC1:" / "✅ 负责"）。` +
-        `这些应该分别放 acceptance_criteria / scope 字段,不是任务说明。`,
-    });
+    return textResult(
+      {
+        error: `requirements 字段含疑似 AC 或 Scope 内容（"**断言**" / "AC1:" / "✅ 负责"）。` +
+          `这些应该分别放 acceptance_criteria / scope 字段,不是任务说明。`,
+      },
+      "jira_create_task 失败: requirements 字段混入 AC/Scope",
+    );
   }
   const scope = args.scope;
   if (typeof scope !== "string" || scope.trim().length === 0) {
-    return textResult({
-      error:
-        "create_task requires `scope` (string, non-empty). " +
-        "Pass 按 labels.md 标注 ✅ 负责 / ❌ 不负责 的职责文本. " +
-        "See ~/.openclaw/skills/task-orchestrator/references/labels.md for label → scope mapping.",
-    });
+    return textResult(
+      {
+        error:
+          "create_task requires `scope` (string, non-empty). " +
+          "Pass 按 labels.md 标注 ✅ 负责 / ❌ 不负责 的职责文本. " +
+          "See ~/.openclaw/skills/task-orchestrator/references/labels.md for label → scope mapping.",
+      },
+      "jira_create_task 失败: 缺 scope",
+    );
   }
   const acceptanceCriteria = args.acceptance_criteria;
   if (
     typeof acceptanceCriteria !== "string" ||
     acceptanceCriteria.trim().length === 0
   ) {
-    return textResult({
-      error:
-        "create_task requires `acceptance_criteria` (plain text string, non-empty). " +
-        "NOT a string[]. Use \\n to separate multiple ACs, e.g. 'AC1: ...\\nAC2: ...'. " +
-        "See skills/jira/SKILL.md.",
-    });
+    return textResult(
+      {
+        error:
+          "create_task requires `acceptance_criteria` (plain text string, non-empty). " +
+          "NOT a string[]. Use \\n to separate multiple ACs, e.g. 'AC1: ...\\nAC2: ...'. " +
+          "See skills/jira/SKILL.md.",
+      },
+      "jira_create_task 失败: 缺 acceptance_criteria",
+    );
   }
 
   // Optional: priority (default Medium). labels always includes "plan"
@@ -194,21 +223,41 @@ export async function createTask(
     const result: Record<string, unknown> = {
       ok: true,
       method: "create_task",
-      request: { fields },
+      // CP-2384 AC2 + CP-2693 batch 1: strip `request: {fields}` echo (12 工具
+      // 单点最大冗余 — 含 buildTaskDescription 生成的 ADF description 1-3KB+,
+      // 完全就是 agent 自己的输入 bounce back). 与 create_subtask 同构 (a89b512
+      // L186-190), 只留 key 类 project/summary/labels.
+      request: { project, summary, labels },
       issue: { id: data.id, key: data.key, self: data.self },
-      summary: { key: data.key, id: data.id, url: data.self },
       block: blockPlan.length > 0 ? blockPlan : undefined,
     };
     if (blockErrors.length > 0) {
       result.block_errors = blockErrors;
     }
-    return textResult(result);
+    return textResult(result, createTaskDetailsSummary(data.key, summary));
   } catch (err) {
     if (err instanceof JiraHttpError) {
-      return textResult({ error: `jira.create_task failed: ${err.message}` });
+      return textResult(
+        { error: `jira.create_task failed: ${err.message}` },
+        `jira_create_task 失败: HTTP ${err.status} ${err.statusText}`,
+      );
     }
-    return textResult({ error: `jira.create_task failed: ${errorMessage(err)}` });
+    return textResult(
+      { error: `jira.create_task failed: ${errorMessage(err)}` },
+      `jira_create_task 失败: ${errorMessage(err)}`,
+    );
   }
+}
+
+function createTaskDetailsSummary(newKey: string | undefined, summary: string): string {
+  // summary 太长 → 截断 + 尾部标记. 整条 < 100 字符.
+  const keyPrefix = newKey ? `成功创建主任务 ${newKey}: ` : "成功创建主任务: ";
+  const headroom = 99 - keyPrefix.length;
+  if (headroom <= 0) return keyPrefix.trimEnd();
+  const head = summary.length <= headroom
+    ? summary
+    : summary.slice(0, Math.max(0, headroom - 1)) + "…";
+  return keyPrefix + head;
 }
 
 function errorMessage(err: unknown): string {

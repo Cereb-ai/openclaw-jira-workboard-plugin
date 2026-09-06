@@ -134,6 +134,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for code structure, how to add a new tool
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, testing, and PR workflow.
 
+**Changing a tool's return shape?** Read [CONTRIBUTING.md § Changing a tool's return shape](CONTRIBUTING.md#changing-a-tools-return-shape) — the 九面 checklist (ⓐ-ⓘ) is the SOP for any field/contract change. PRs missing the核验表 = 不 merge.
+
 ## License
 
 [MIT](LICENSE) © 2026 Leo Wang / Cereb

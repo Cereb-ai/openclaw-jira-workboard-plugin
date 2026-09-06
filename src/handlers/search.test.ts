@@ -10,6 +10,9 @@
  *     list passes through, with issuelinks allowed if explicitly requested.
  *   - request echo reduced to `{jql}` only.
  *   - 400/410/network errors surface as error envelopes.
+ *
+ *   CP-2693 batch 1: `details` = <100-char one-line summary string
+ *   (`JQL 命中 X 票, 本次返回 Y 票`), NOT the full structured object.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -114,6 +117,12 @@ describe("search (CP-2384)", () => {
     expect(i.parent).toBe("TEST-0");
     // issuelinks absent at the surface (default fields dropped it).
     expect(i.issuelinks).toBeUndefined();
+    // CP-2693 batch 1: details is a <100-char one-line summary string.
+    expect(typeof result.details).toBe("string");
+    const details = result.details as string;
+    expect(details.length).toBeLessThan(100);
+    expect(details).toMatch(/JQL 命中/);
+    expect(details).toMatch(/本次返回/);
   });
 
   it("AC-2384-S-4: request echo reduced to {jql} only", async () => {
@@ -136,6 +145,9 @@ describe("search (CP-2384)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.error).toMatch(/jql/);
     expect(jiraGet).not.toHaveBeenCalled();
+    // CP-2693 batch 1: validation error also has slim details.
+    expect(typeof result.details).toBe("string");
+    expect((result.details as string).length).toBeLessThan(100);
   });
 
   it("AC-2384-S-6: rejects empty jql", async () => {
@@ -143,6 +155,8 @@ describe("search (CP-2384)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.error).toMatch(/jql/);
     expect(jiraGet).not.toHaveBeenCalled();
+    expect(typeof result.details).toBe("string");
+    expect((result.details as string).length).toBeLessThan(100);
   });
 
   it("AC-2384-S-7: 410 upstream (deprecated /search) surfaces as error envelope", async () => {
@@ -154,5 +168,8 @@ describe("search (CP-2384)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.error).toMatch(/jira\.search failed/);
     expect(parsed.error).toMatch(/HTTP 410/);
+    // CP-2693 batch 1: HTTP error path also has slim details.
+    expect(typeof result.details).toBe("string");
+    expect((result.details as string).length).toBeLessThan(100);
   });
 });

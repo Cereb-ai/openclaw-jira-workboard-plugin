@@ -1,21 +1,28 @@
 /**
- * create_subtask handler tests — CP-2384 AC2 (request echo strip to
- * {parent, summary, labels}), AC4 (issue.id/key/self + blockPlan +
- * block_errors preserved), AC6 (反断言 block feedback NOT stripped).
+ * create_task handler tests — CP-2384 AC2 (request echo strip — incomplete
+ * pre-batch-1, only request: {fields} was deferred to CP-2693 batch 1), AC4
+ * (issue.id/key/self + blockPlan + block_errors preserved), AC6 (反断言 block
+ * feedback NOT stripped).
  *
- * CP-2693 batch 1: 去掉 `summary{key,id,url,parent}` 块 + 顶层 `parent` (与
- * request.parent 重复), 与 create_task 同构收敛. details = <100-char summary.
+ * CP-2693 batch 1 (v0.5 提案 RRmzJTZ7Q8 §8 create_task 条目):
+ *   - `request: {fields}` 全量回声去除 (12 工具单点最大冗余 — 含
+ *     buildTaskDescription 生成的 ADF description 1-3KB+). 与 create_subtask
+ *     同构 (a89b512 L186-190), 只留 key 类 project/summary/labels.
+ *   - `summary{key,id,url}` 块去除 (issue{id,key,self} 已覆盖).
+ *   - `block` / `block_errors` 结果反馈完整保留 (CP-2384 反断言).
+ *   - `details` = <100-char one-line summary string.
  *
  * Coverage:
  *   - Happy path: POST /issue returns id/key/self; issue carries the new
- *     ticket identifiers; block feedback preserved; top-level `parent` and
- *     `summary` block REMOVED (CP-2693 batch 1).
- *   - Request echo strip: only {parent, summary, labels} remain (NO full
- *     `fields` ADF description).
+ *     ticket identifiers; block feedback preserved; request echo is
+ *     {project, summary, labels} only (NOT full fields ADF description).
+ *   - request.fields NOT echoed in response (12 工具单点最大冗余去除).
+ *   - summary block REMOVED (issue{key,id,self} covers it).
  *   - block blockPlan + block_errors surface untouched.
- *   - Validation: missing parent/project/summary/requirements/scope/
- *     acceptance_criteria/labels — each returns a clear error and POST is
- *     never called.
+ *   - Validation: missing project/summary/requirements/scope/
+ *     acceptance_criteria — each returns a clear error and POST is never
+ *     called.
+ *   - requirements > 600 chars rejects + sanity-check (AC 内容混入 detects).
  *   - Upstream HTTP errors surface as error envelopes.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -44,7 +51,7 @@ vi.mock("../auth.js", async (importOriginal) => {
   };
 });
 
-// Mock the block module so create_subtask doesn't try to actually POST
+// Mock the block module so create_task doesn't try to actually POST
 // /issueLink during tests.
 vi.mock("../handlers/block.js", () => ({
   block: vi.fn(async () => ({
@@ -54,20 +61,18 @@ vi.mock("../handlers/block.js", () => ({
 }));
 
 import { jiraPost } from "../http.js";
-import { createSubtask } from "../handlers/create_subtask.js";
+import { createTask } from "../handlers/create_task.js";
 import { block } from "../handlers/block.js";
 
 const BASE_INPUT = {
   project: "TEST",
-  parent: "TEST-1",
-  summary: "subtask summary",
-  requirements: "do X",
+  summary: "main task summary",
+  requirements: "Why: test\n\n## What\n\n- step 1",
   scope: "✅ 负责\n- impl",
   acceptance_criteria: "AC1: ...\nAC2: ...",
-  labels: ["code"],
 } as const;
 
-describe("create_subtask (CP-2384)", () => {
+describe("create_task (CP-2384 + CP-2693 batch 1)", () => {
   beforeEach(() => {
     vi.mocked(jiraPost).mockReset();
     vi.mocked(block).mockClear();
@@ -77,14 +82,13 @@ describe("create_subtask (CP-2384)", () => {
     vi.clearAllMocks();
   });
 
-  it("AC-2384-CS-1: happy path — issue.id/key/self + block feedback preserved (CP-2384 AC4) + summary block & 顶层 parent REMOVED (CP-2693 batch 1)", async () => {
+  it("AC-2693-CT-1: happy path — issue.id/key/self + block feedback preserved + request echo slimmed (CP-2693 batch 1)", async () => {
     vi.mocked(jiraPost).mockResolvedValueOnce({
       id: "10042",
       key: "TEST-2",
       self: "https://example.atlassian.net/rest/api/3/issue/10042",
     });
-    // block is mocked to return ok; track invocation.
-    const result = await createSubtask({
+    const result = await createTask({
       ...BASE_INPUT,
       block: { blocks: ["TEST-3"], blockedBy: ["TEST-4"] },
     });
@@ -97,8 +101,16 @@ describe("create_subtask (CP-2384)", () => {
       key: "TEST-2",
       self: "https://example.atlassian.net/rest/api/3/issue/10042",
     });
-    // CP-2693 batch 1: 顶层 `parent` 与 summary 块都去除 (与 request.parent 重复).
-    expect(parsed).not.toHaveProperty("parent");
+    // CP-2693 batch 1: request echo reduced to {project, summary, labels}
+    // (12 工具单点最大冗余去除: request:{fields} 含 buildTaskDescription
+    // 生成的 ADF description 1-3KB+).
+    expect(parsed.request).toEqual({
+      project: "TEST",
+      summary: "main task summary",
+      labels: ["plan"],
+    });
+    expect(parsed.request).not.toHaveProperty("fields");
+    // CP-2693 batch 1: summary block REMOVED (issue{key,id,self} 覆盖).
     expect(parsed).not.toHaveProperty("summary");
     // block plan preserved.
     expect(parsed.block).toEqual([
@@ -113,60 +125,47 @@ describe("create_subtask (CP-2384)", () => {
     const details = result.details as string;
     expect(details.length).toBeLessThan(100);
     expect(details).toMatch(/TEST-2/);
-    expect(details).toMatch(/TEST-1/);
-    expect(details).toMatch(/子任务/);
+    expect(details).toMatch(/主任务/);
   });
 
-  it("AC-2384-CS-2: request echo reduced to {parent, summary, labels} (CP-2384 AC2)", async () => {
+  it("AC-2693-CT-2: POST /issue receives the full `fields` ADF description (internal contract unchanged)", async () => {
     vi.mocked(jiraPost).mockResolvedValueOnce({
       id: "10043",
       key: "TEST-5",
       self: "url",
     });
-    const result = await createSubtask(BASE_INPUT);
-    const parsed = JSON.parse(result.content[0].text as string);
-
-    // Echo only the key-class identifiers — NOT the full `fields` ADF
-    // description (which would be the entire requirements + scope +
-    // acceptance_criteria text, exactly the bit we're trying to shrink).
-    expect(parsed.request).toEqual({
-      parent: "TEST-1",
-      summary: "subtask summary",
-      labels: ["code"],
-    });
-    expect(parsed.request).not.toHaveProperty("fields");
-    expect(parsed.request).not.toHaveProperty("project");
-    expect(parsed.request).not.toHaveProperty("requirements");
-    expect(parsed.request).not.toHaveProperty("scope");
-    expect(parsed.request).not.toHaveProperty("acceptance_criteria");
-  });
-
-  it("AC-2384-CS-3: POST /issue receives the full `fields` ADF description (internal contract unchanged)", async () => {
-    vi.mocked(jiraPost).mockResolvedValueOnce({
-      id: "10044",
-      key: "TEST-6",
-      self: "url",
-    });
-    await createSubtask(BASE_INPUT);
+    await createTask(BASE_INPUT);
 
     expect(jiraPost).toHaveBeenCalledTimes(1);
-    const [cfg, path, body] = vi.mocked(jiraPost).mock.calls[0];
+    const [, path, body] = vi.mocked(jiraPost).mock.calls[0];
     expect(path).toBe("issue");
     const fields = (body as { fields: Record<string, unknown> }).fields;
     // Server-side still gets the rendered ADF description (requirements +
     // scope + acceptance_criteria wrapped into the standard 3 sections).
-    expect(fields.summary).toBe("subtask summary");
+    expect(fields.summary).toBe("main task summary");
+    expect(fields.project).toEqual({ key: "TEST" });
+    expect(fields.issuetype).toEqual({ name: "Task" });
     const desc = fields.description as {
       type: string;
       content: Array<{ type: string }>;
     };
     expect(desc.type).toBe("doc");
-    // Internal ADF contract NOT touched by CP-2384 (echo strip is response-only).
+    // Internal ADF contract NOT touched (echo strip is response-only).
     expect(Array.isArray(desc.content)).toBe(true);
   });
 
-  it("AC-2384-CS-4: block_errors surface when block() returns ok:false (CP-2384 反断言 — block feedback NOT stripped)", async () => {
-    // Override the mock for THIS test only.
+  it("AC-2693-CT-3: caller-supplied extra labels merged with auto 'plan' label", async () => {
+    vi.mocked(jiraPost).mockResolvedValueOnce({
+      id: "10044",
+      key: "TEST-6",
+      self: "url",
+    });
+    const result = await createTask({ ...BASE_INPUT, labels: ["code", "urgent"] });
+    const parsed = JSON.parse(result.content[0].text as string);
+    expect(parsed.request.labels).toEqual(["plan", "code", "urgent"]);
+  });
+
+  it("AC-2693-CT-4: block_errors surface when block() returns ok:false (CP-2384 反断言 — block feedback NOT stripped)", async () => {
     vi.mocked(jiraPost).mockResolvedValueOnce({
       id: "10045",
       key: "TEST-7",
@@ -177,41 +176,40 @@ describe("create_subtask (CP-2384)", () => {
       details: { ok: false, error: "no perms" },
     } as never);
 
-    const result = await createSubtask({
+    const result = await createTask({
       ...BASE_INPUT,
       block: { blocks: ["TEST-3"] },
     });
     const parsed = JSON.parse(result.content[0].text as string);
 
-    // block_errors preserved.
     expect(parsed.block_errors).toBeDefined();
     expect(parsed.block_errors[0]).toMatch(/no perms/);
   });
 
-  it("AC-2384-CS-5: rejects missing project", async () => {
-    const result = await createSubtask({ ...BASE_INPUT, project: "" });
+  it("AC-2693-CT-5: rejects missing project", async () => {
+    const result = await createTask({ ...BASE_INPUT, project: "" });
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.error).toMatch(/project/);
     expect(jiraPost).not.toHaveBeenCalled();
-    // CP-2693 batch 1: validation error path also has slim details.
+    // CP-2693 batch 1: validation error also has slim details.
     expect(typeof result.details).toBe("string");
     expect((result.details as string).length).toBeLessThan(100);
   });
 
-  it("AC-2384-CS-6: rejects missing labels", async () => {
-    const result = await createSubtask({ ...BASE_INPUT, labels: [] });
+  it("AC-2693-CT-6: rejects missing summary", async () => {
+    const result = await createTask({ ...BASE_INPUT, summary: "" });
     const parsed = JSON.parse(result.content[0].text as string);
-    expect(parsed.error).toMatch(/labels/);
+    expect(parsed.error).toMatch(/summary/);
     expect(jiraPost).not.toHaveBeenCalled();
     expect(typeof result.details).toBe("string");
     expect((result.details as string).length).toBeLessThan(100);
   });
 
-  it("AC-2384-CS-7: rejects missing requirements / scope / acceptance_criteria", async () => {
+  it("AC-2693-CT-7: rejects missing requirements / scope / acceptance_criteria", async () => {
     for (const field of ["requirements", "scope", "acceptance_criteria"]) {
       const input = { ...BASE_INPUT } as Record<string, unknown>;
       input[field] = "";
-      const result = await createSubtask(input);
+      const result = await createTask(input);
       const parsed = JSON.parse(result.content[0].text as string);
       expect(parsed.error).toMatch(new RegExp(field));
       expect(jiraPost).not.toHaveBeenCalled();
@@ -219,27 +217,47 @@ describe("create_subtask (CP-2384)", () => {
     }
   });
 
-  it("AC-2384-CS-8: 401 upstream surfaces as error envelope", async () => {
+  it("AC-2693-CT-8: rejects requirements > 600 chars (sanity-check粒度)", async () => {
+    const result = await createTask({
+      ...BASE_INPUT,
+      requirements: "x".repeat(601),
+    });
+    const parsed = JSON.parse(result.content[0].text as string);
+    expect(parsed.error).toMatch(/requirements.*> 600/);
+    expect(jiraPost).not.toHaveBeenCalled();
+  });
+
+  it("AC-2693-CT-9: rejects requirements 字段混入 AC/Scope 关键词", async () => {
+    const result = await createTask({
+      ...BASE_INPUT,
+      requirements: "**断言** blah",
+    });
+    const parsed = JSON.parse(result.content[0].text as string);
+    expect(parsed.error).toMatch(/AC 或 Scope 内容/);
+    expect(jiraPost).not.toHaveBeenCalled();
+  });
+
+  it("AC-2693-CT-10: 401 upstream surfaces as error envelope", async () => {
     const { JiraHttpError } = await import("../http.js");
     vi.mocked(jiraPost).mockRejectedValueOnce(
       new JiraHttpError(401, "Unauthorized", "bad token"),
     );
-    const result = await createSubtask(BASE_INPUT);
+    const result = await createTask(BASE_INPUT);
     const parsed = JSON.parse(result.content[0].text as string);
-    expect(parsed.error).toMatch(/jira\.create_subtask failed/);
+    expect(parsed.error).toMatch(/jira\.create_task failed/);
     expect(parsed.error).toMatch(/HTTP 401/);
     // CP-2693 batch 1: HTTP error path also has slim details.
     expect(typeof result.details).toBe("string");
     expect((result.details as string).length).toBeLessThan(100);
   });
 
-  it("AC-2384-CS-9: happy path WITHOUT `block` arg skips block()", async () => {
+  it("AC-2693-CT-11: happy path WITHOUT `block` arg skips block()", async () => {
     vi.mocked(jiraPost).mockResolvedValueOnce({
       id: "10046",
       key: "TEST-8",
       self: "url",
     });
-    const result = await createSubtask(BASE_INPUT);
+    const result = await createTask(BASE_INPUT);
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.ok).toBe(true);
     expect(parsed.block).toBeUndefined();
