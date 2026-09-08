@@ -16,6 +16,16 @@
  * throw JiraPluginError before any side effect if missing, so the
  * orchestrator gets a clear signal to fix the call rather than retry.
  *
+ * Verdict ↔ summary consistency guard (CP-2805 / CP-2806):
+ *   Reject the call BEFORE any Jira write (comment / transition / label /
+ *   assignee) when evidence summary contains a CP-1918 FAIL keyword
+ *   (whitelisted: literal "FAIL" / "门禁 FAIL" / "前置门禁不达成")
+ *   but caller submits verdict="PASS". This is the plugin-layer hard
+ *   enforcement that complements the soft tester-skill guard
+ *   (agent-skills task-dispatcher/bin/verdict_guard.py) — CP-2799
+ *   empirically showed the soft guard was never invoked, so the plugin
+ *   layer is the only path that covers all callers.
+ *
  * Atomic (per step) — same partial-result reporting pattern as before:
  * if step 1 fails, nothing happened. If a later step fails, the prior
  * state is preserved and we surface a partial result with hint.
@@ -36,6 +46,8 @@
  *                "CP-2690 已 FAIL: escalated 已标 + assignee 已清"
  *              partial 例
  *                "CP-2690 部分完成: 评论已发但转态失败, 见 hint"
+ *              rejection (verdict↔summary 不一致) 例
+ *                "CP-2690 拒收: summary 含 FAIL 但 verdict=PASS"
  */
 import { JiraPluginError, loadConfig } from "../auth.js";
 import { jiraGet, jiraPost, jiraPut, JiraHttpError } from "../http.js";
@@ -50,6 +62,69 @@ import type { ToolResult } from "../types.js";
 
 type Verdict = "PASS" | "FAIL";
 const ESCALATED_LABEL = "escalated";
+
+// ─── FAIL keyword whitelist (mirror CP-1918 verdict_guard.py L42-46) ─────────
+// Empirically, tester / reviewer agents write "FAIL" (literal ASCII) /
+// "门禁 FAIL" / "前置门禁不达成" when the intent is FAIL. These are the
+// ONLY strings we treat as a mismatch signal against verdict="PASS".
+// Fuzzy words ("失败" / "未通过" / lowercase "fail") are intentionally
+// NOT on this list to avoid false positives on legitimate PASS runs.
+export const FAIL_KEYWORDS: readonly string[] = [
+  "FAIL",              // literal ASCII (case-sensitive)
+  "门禁 FAIL",          // gate-fail shorthand w/ English FAIL
+  "前置门禁不达成",     // full CN phrase (pre-gate unmet)
+] as const;
+
+/**
+ * Pure helper: return the first FAIL keyword that appears as a substring
+ * of `summary`, or `null` if none matches. Case-sensitive (matches the
+ * Python `kw in summary` semantics — CP-1918 evidence shows uppercase
+ * "FAIL" is the consistent signal; lowercase never appears in
+ * auto-generated evidence).
+ *
+ * Pure: no I/O, no side effects, safe to unit-test directly.
+ */
+export function findFailKeyword(
+  summary: string,
+  keywords: readonly string[] = FAIL_KEYWORDS,
+): string | null {
+  if (typeof summary !== "string") return null;
+  for (const kw of keywords) {
+    if (kw && summary.includes(kw)) return kw;
+  }
+  return null;
+}
+
+/**
+ * Pure helper: verdict ↔ summary consistency check (CP-2805 / CP-2806
+ * plugin-layer hard guard, mirrors CP-1918 verdict_guard.py
+ * check_verdict_consistency). Returns the matched keyword (a string) when
+ * the call should be rejected, or `null` when the call is consistent.
+ *
+ *   summary 含 FAIL 关键词 + verdict="PASS"  → reject (return keyword)
+ *   summary 含 FAIL 关键词 + verdict="FAIL"  → ok    (return null)
+ *   summary 无 FAIL 关键词 + verdict="PASS"  → ok    (return null)
+ *   summary 无 FAIL 关键词 + verdict="FAIL"  → ok    (return null)
+ *
+ * The caller is responsible for surfacing `reason` to the agent so it
+ * can fix either the verdict or the summary and resubmit.
+ */
+export function checkVerdictConsistency(
+  summary: string,
+  verdict: string,
+): { matched: string; reason: string } | null {
+  const matched = findFailKeyword(summary);
+  if (matched && verdict === "PASS") {
+    return {
+      matched,
+      reason:
+        `verdict 一致性校验失败: summary 含 "${matched}" 但 verdict="PASS"。` +
+        `修正: 意图 FAIL → verdict 改 "FAIL" 并补 reason;` +
+        ` 意图 PASS → 修正 summary 去除 "${matched}" 字样。`,
+    };
+  }
+  return null;
+}
 
 export async function submitVerdict(
   args: Record<string, unknown>,
@@ -100,6 +175,23 @@ export async function submitVerdict(
           `assignee signal "human pickup" to the orchestrator.`,
       );
     }
+  }
+
+  // Verdict ↔ summary consistency guard (CP-2805 / CP-2806). Runs AFTER
+  // param validation (issueIdOrKey/verdict/summary) and FAIL-reason
+  // validation but BEFORE any Jira write (comment / transition / label
+  // / assignee). On reject: zero side effects, textResult error with
+  // matched keyword + repair hint, mirroring CP-1918 verdict_guard.py.
+  const inconsistency = checkVerdictConsistency(summary, verdict);
+  if (inconsistency) {
+    return textResult(
+      {
+        error:
+          `jira.submit_verdict rejected: verdict="PASS" but summary contains ` +
+          `"${inconsistency.matched}" (CP-1918 FAIL keyword). ${inconsistency.reason}`,
+      },
+      `${issueIdOrKey} 拒收: summary 含 FAIL 关键词但 verdict=PASS, 见 hint`,
+    );
   }
 
   // Step 1: post the verdict comment (always).
