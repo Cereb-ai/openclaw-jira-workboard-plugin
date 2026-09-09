@@ -1,6 +1,6 @@
 {
   "name": "@cereb/jira-openclaw-plugin",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "type": "module",
   "description": "OpenClaw native plugin for Jira Cloud REST API v3. 14 named tools via defineToolPlugin.",
   "license": "MIT",

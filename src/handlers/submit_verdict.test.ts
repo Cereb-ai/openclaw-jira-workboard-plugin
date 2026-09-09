@@ -41,9 +41,9 @@ describe("submit_verdict FAIL escalation (SSSS-252)", () => {
     vi.clearAllMocks();
   });
 
-  it("AC-252-1: verdict=FAIL with reason → comment + label + clear assignee", async () => {
+  it("AC-252-1: verdict=FAIL with reason → comment + labels [escalated, failed] + clear assignee", async () => {
     vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" }); // comment
-    vi.mocked(jiraPut).mockResolvedValueOnce({}); // add label
+    vi.mocked(jiraPut).mockResolvedValueOnce({}); // add labels
     vi.mocked(jiraPut).mockResolvedValueOnce({}); // clear assignee
 
     const result = await submitVerdict({
@@ -55,11 +55,13 @@ describe("submit_verdict FAIL escalation (SSSS-252)", () => {
 
     expect(jiraPost).toHaveBeenCalledTimes(1);
     expect(jiraPut).toHaveBeenCalledTimes(2);
-    // First PUT: label
+    // CP-2856: single PUT adds BOTH labels in one `update.labels` array
+    // (Jira treats as set operation, order-independent). "failed" is the
+    // 持久失败事实 label; "escalated" remains the 瞬时派发信号.
     expect(vi.mocked(jiraPut).mock.calls[0][2]).toEqual({
-      update: { labels: [{ add: "escalated" }] },
+      update: { labels: [{ add: "escalated" }, { add: "failed" }] },
     });
-    // Second PUT: clear assignee
+    // Second PUT: clear assignee (unchanged)
     expect(vi.mocked(jiraPut).mock.calls[1][2]).toEqual({
       fields: { assignee: null },
     });
@@ -67,7 +69,9 @@ describe("submit_verdict FAIL escalation (SSSS-252)", () => {
     const parsed = JSON.parse(body);
     expect(parsed.ok).toBe(true);
     expect(parsed.verdict).toBe("FAIL");
-    expect(parsed.label).toBe("escalated");
+    // CP-2856: 顶层 `label` 单数字段 → `labels` 数组 (FAIL only)
+    expect(parsed.labels).toEqual(["escalated", "failed"]);
+    expect(parsed).not.toHaveProperty("label");
     expect(parsed.assigneeCleared).toBe(true);
     // CP-2710 batch 3: summary 块去除, verdict 已统一在顶层
     expect(parsed).not.toHaveProperty("summary");
@@ -77,6 +81,7 @@ describe("submit_verdict FAIL escalation (SSSS-252)", () => {
     const details = result.details as string;
     expect(details.length).toBeLessThan(100);
     expect(details).toMatch(/TEST-1 已 FAIL/);
+    expect(details).toMatch(/escalated \+ failed/);
   });
 
   it("AC-252-2: verdict=FAIL with empty reason → throws JiraPluginError (no side effect)", async () => {
@@ -122,6 +127,9 @@ describe("submit_verdict FAIL escalation (SSSS-252)", () => {
     // The hint about retrying is embedded in the error message
     // (no separate hint field for FAIL partial — single error string).
     expect(parsed.error).toMatch(/retry/i);
+    // CP-2856: label PUT 失败的 error 文案要包含两个 label (operator 知道是哪个失败了)
+    expect(parsed.error).toMatch(/escalated/);
+    expect(parsed.error).toMatch(/failed/);
     // CP-2710 batch 3: partial 结构 0 改动, 仅 details 摘要化
     expect(parsed).not.toHaveProperty("summary");
     expect(typeof result.details).toBe("string");
@@ -220,7 +228,7 @@ describe("submit_verdict FAIL escalation (SSSS-252)", () => {
 
   it("CP-2710-5: FAIL success no longer carries hint (CP-2710 草稿池: 语义冗余于 label 反馈)", async () => {
     vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" }); // comment
-    vi.mocked(jiraPut).mockResolvedValueOnce({}); // add label
+    vi.mocked(jiraPut).mockResolvedValueOnce({}); // add labels
     vi.mocked(jiraPut).mockResolvedValueOnce({}); // clear assignee
 
     const result = await submitVerdict({
@@ -234,7 +242,9 @@ describe("submit_verdict FAIL escalation (SSSS-252)", () => {
     const parsed = JSON.parse(body);
     expect(parsed.ok).toBe(true);
     expect(parsed.verdict).toBe("FAIL");
-    expect(parsed.label).toBe("escalated");
+    // CP-2856: dual labels 取代单数 label
+    expect(parsed.labels).toEqual(["escalated", "failed"]);
+    expect(parsed).not.toHaveProperty("label");
     expect(parsed.assigneeCleared).toBe(true);
     // FAIL 成功路径不再有 hint (CP-2710 草稿池: 与 label 反馈语义冗余)
     expect(parsed).not.toHaveProperty("hint");
@@ -411,7 +421,7 @@ describe("submit_verdict verdict↔summary consistency guard (CP-2805)", () => {
 
   it("AC-2805-4: summary 含 FAIL keyword + verdict=FAIL → 原 FAIL 流 (0 误拦)", async () => {
     vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" });
-    vi.mocked(jiraPut).mockResolvedValueOnce({}); // add label
+    vi.mocked(jiraPut).mockResolvedValueOnce({}); // add labels
     vi.mocked(jiraPut).mockResolvedValueOnce({}); // clear assignee
 
     const result = await submitVerdict({
@@ -423,7 +433,9 @@ describe("submit_verdict verdict↔summary consistency guard (CP-2805)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.ok).toBe(true);
     expect(parsed.verdict).toBe("FAIL");
-    expect(parsed.label).toBe("escalated");
+    // CP-2856: dual labels
+    expect(parsed.labels).toEqual(["escalated", "failed"]);
+    expect(parsed).not.toHaveProperty("label");
     expect(parsed.assigneeCleared).toBe(true);
     expect(jiraPost).toHaveBeenCalledTimes(1);
     expect(jiraPut).toHaveBeenCalledTimes(2);
@@ -465,7 +477,8 @@ describe("submit_verdict verdict↔summary consistency guard (CP-2805)", () => {
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.ok).toBe(true);
     expect(parsed.verdict).toBe("FAIL");
-    expect(parsed.label).toBe("escalated");
+    // CP-2856: dual labels
+    expect(parsed.labels).toEqual(["escalated", "failed"]);
   });
 
   it("AC-2805-7 (keyword boundary): 模糊词 '失败' + verdict=PASS → 0 命中通过", async () => {
@@ -531,5 +544,168 @@ describe("submit_verdict verdict↔summary consistency guard (CP-2805)", () => {
     expect(jiraPost).not.toHaveBeenCalled();
     expect(jiraGet).not.toHaveBeenCalled();
     expect(jiraPut).not.toHaveBeenCalled();
+  });
+});
+
+// ─── CP-2856: FAIL 双 label (escalated + failed) ─────────────────────────
+// planner A+E v0.11 §3 改动 C + §7.2 改动 9 + §7.3 label 语义分离:
+//   escalated = 瞬时派发信号 (routing/JQL/父任务门只认这个, abandon 时移除)
+//   failed    = 持久失败事实 (E 表 done 状态可区分来源, abandon 时保留)
+// 同一升级路径同时 add 两 label (Jira label set 操作, 顺序无关).
+// 顶层 return 字段 `label` (单数) → `labels` (数组).
+describe("submit_verdict FAIL dual labels (CP-2856)", () => {
+  beforeEach(() => {
+    vi.mocked(jiraGet).mockReset();
+    vi.mocked(jiraPost).mockReset();
+    vi.mocked(jiraPut).mockReset();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("AC-2856-1 (AC1 FAIL 双加): verdict=FAIL → 同一次 PUT 同时 add escalated + failed", async () => {
+    vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" });
+    vi.mocked(jiraPut).mockResolvedValueOnce({}); // 同一 PUT 加两 label
+    vi.mocked(jiraPut).mockResolvedValueOnce({}); // clear assignee
+
+    const result = await submitVerdict({
+      issueIdOrKey: "CP-2856",
+      verdict: "FAIL",
+      summary: "tests failed",
+      reason: "vitest timeout in worker",
+    });
+
+    // AC1 (FAIL 双加): mock Jira PUT 捕获 labels 数组, 两 label 均在
+    const putCalls = vi.mocked(jiraPut).mock.calls;
+    expect(putCalls.length).toBe(2);
+    const labelsPayload = putCalls[0][2] as {
+      update: { labels: Array<{ add: string }> };
+    };
+    expect(labelsPayload.update.labels).toHaveLength(2);
+    const addedLabels = labelsPayload.update.labels.map((op) => op.add);
+    expect(addedLabels).toContain("escalated");
+    expect(addedLabels).toContain("failed");
+
+    // 顶层 return 字段: 单数 label → 数组 labels
+    const parsed = JSON.parse(result.content[0].text as string);
+    expect(parsed.labels).toEqual(["escalated", "failed"]);
+    expect(parsed).not.toHaveProperty("label");
+    expect(parsed.ok).toBe(true);
+    expect(parsed.verdict).toBe("FAIL");
+    expect(parsed.assigneeCleared).toBe(true);
+
+    // 反断言 (AC1): FAIL 只加 escalated 不加 failed → FAIL
+    expect(addedLabels).not.toEqual(["escalated"]);
+  });
+
+  it("AC-2856-2 (AC2 PASS 0 改动): verdict=PASS 不触发任何 label PUT, 单数字段仍不存在", async () => {
+    vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" });
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      transitions: [
+        { id: "11", name: "Done", to: { name: "已完成", statusCategory: { id: 3, key: "done" } } },
+      ],
+    });
+    vi.mocked(jiraPost).mockResolvedValueOnce({});
+
+    const result = await submitVerdict({
+      issueIdOrKey: "CP-2856",
+      verdict: "PASS",
+      summary: "vitest 110/110 green",
+      evidence: "all tests pass",
+    });
+
+    const parsed = JSON.parse(result.content[0].text as string);
+    // PASS 路径 0 label 操作
+    expect(jiraPut).not.toHaveBeenCalled();
+    // PASS 顶层没有 labels 字段 (FAIL only)
+    expect(parsed).not.toHaveProperty("labels");
+    expect(parsed).not.toHaveProperty("label");
+    // PASS 路径 transition 字段不变
+    expect(parsed.ok).toBe(true);
+    expect(parsed.verdict).toBe("PASS");
+    expect(parsed.transition.to).toBe("已完成");
+  });
+
+  it("AC-2856-3 (AC3 回退原子性不回归): comment OK + label PUT 失败 → partial hint 完整保留", async () => {
+    vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" });
+    vi.mocked(jiraPut).mockRejectedValueOnce(new Error("labels PUT 500"));
+
+    const result = await submitVerdict({
+      issueIdOrKey: "CP-2856",
+      verdict: "FAIL",
+      summary: "tests failed",
+      reason: "vitest timeout",
+    });
+
+    const parsed = JSON.parse(result.content[0].text as string);
+    // partial 结构 0 改动 (CP-2710 红线 #28510)
+    expect(parsed.ok).toBe(false);
+    expect(parsed.partial).toBe(true);
+    expect(parsed.verdict).toBe("FAIL");
+    expect(parsed.comment.id).toBe("c1");
+    // 既有 retry hint 语义保留
+    expect(parsed.error).toMatch(/retry/i);
+    // CP-2856: error 文案要包含两个 label 名, operator 知道是哪些 label 没加上
+    expect(parsed.error).toMatch(/escalated/);
+    expect(parsed.error).toMatch(/failed/);
+    // 没有成功字段被错置
+    expect(parsed).not.toHaveProperty("labels");
+    expect(parsed).not.toHaveProperty("assigneeCleared");
+  });
+
+  it("AC-2856-4 (AC3 续): comment OK + labels OK + clear assignee 失败 → partial hint 完整保留", async () => {
+    vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" });
+    vi.mocked(jiraPut).mockResolvedValueOnce({}); // labels OK
+    vi.mocked(jiraPut).mockRejectedValueOnce(new Error("assignee 500"));
+
+    const result = await submitVerdict({
+      issueIdOrKey: "CP-2856",
+      verdict: "FAIL",
+      summary: "tests failed",
+      reason: "vitest timeout",
+    });
+
+    const parsed = JSON.parse(result.content[0].text as string);
+    // partial 结构 0 改动
+    expect(parsed.ok).toBe(false);
+    expect(parsed.partial).toBe(true);
+    expect(parsed.verdict).toBe("FAIL");
+    expect(parsed.comment.id).toBe("c1");
+    // hint 字段存在 + 内容完整保留
+    expect(parsed.hint).toBeDefined();
+    expect(parsed.hint).toMatch(/assignee/);
+    expect(parsed.hint).toMatch(/update/);
+    // CP-2856: labels 字段在 partial 也要回声
+    expect(parsed.labels).toEqual(["escalated", "failed"]);
+    expect(parsed).not.toHaveProperty("label");
+  });
+
+  it("AC-2856-5 (AC3 续): label PUT payload 是原子数组 (一次 PUT, 顺序无关)", async () => {
+    // Jira `update.labels` 是 set 操作: 一次 PUT 多个 add 一起原子应用.
+    // 反断言: 不应拆成两次 PUT (避免失败一半留一半).
+    vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" });
+    vi.mocked(jiraPut).mockResolvedValueOnce({});
+    vi.mocked(jiraPut).mockResolvedValueOnce({});
+
+    await submitVerdict({
+      issueIdOrKey: "CP-2856",
+      verdict: "FAIL",
+      summary: "x",
+      reason: "y",
+    });
+
+    const putCalls = vi.mocked(jiraPut).mock.calls;
+    // 第一次 PUT = labels (含 escalated + failed), 第二次 PUT = clear assignee
+    expect(putCalls[0][2]).toEqual({
+      update: { labels: [{ add: "escalated" }, { add: "failed" }] },
+    });
+    expect(putCalls[1][2]).toEqual({ fields: { assignee: null } });
+    // 不能多 PUT labels 操作
+    const labelPuts = putCalls.filter(([, , body]) => {
+      const b = body as { update?: { labels?: unknown[] } };
+      return Array.isArray(b?.update?.labels);
+    });
+    expect(labelPuts.length).toBe(1);
   });
 });

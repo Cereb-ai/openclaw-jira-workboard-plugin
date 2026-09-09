@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `jira_create_task`: labels array now always includes the `"plan"` label, regardless of whether the caller passed `args.labels` (was a regression risk when caller passed `labels=[]`).
 
+## [0.5.2] - 2026-09-09
+
+### Changed
+- `jira_submit_verdict` (FAIL branch): the escalation `PUT /issue/{key}` now adds both `"escalated"` and `"failed"` labels in one `update.labels` array (CP-2856 / planner A+E v0.11 §3 改动 C + §7.2 改动 9 + §7.3 label 语义分离). `"escalated"` remains the 瞬时派发信号 (routing / JQL / 父任务门只认这个); `"failed"` is the new 持久失败事实 label that survives `jira_abandon_task` (which keeps its `DEFAULT_LABELS_TO_REMOVE=["escalated"]` default — `failed` 天然保留, enabling the E 表 done 状态 to distinguish escalation sources). Return contract: top-level `label` (string) → `labels: [escalated, failed]` (array) on the FAIL success / FAIL-partial paths; PASS path unchanged.
+
 ## [0.5.1] - 2026-07-01
 
 ### Added

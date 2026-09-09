@@ -9,7 +9,9 @@
  *
  *   FAIL
  *     1. POST  /rest/api/3/issue/{key}/comment  (verdict=FAIL + summary + reason)
- *     2. PUT   /rest/api/3/issue/{key}  labels: add "escalated"
+ *     2. PUT   /rest/api/3/issue/{key}  labels: add ["escalated", "failed"]
+ *         (CP-2856: "failed" = 持久失败事实, "escalated" = 瞬时派发信号;
+ *          abandon_task 0 改动 → 默认只 remove escalated, failed 天然保留)
  *     3. PUT   /rest/api/3/issue/{key}  fields: { assignee: null }
  *
  * Reason is mandatory for FAIL — caller must pass non-empty string. We
@@ -33,17 +35,18 @@
  * "Atomic" here means "in one method call from the agent's perspective" —
  * not DB-style rollback. We don't fabricate idempotency for re-runs.
  *
- * Return contract (CP-2710 batch 3, v0.5 §6/§7/§8):
+ * Return contract (CP-2710 batch 3, v0.5 §6/§7/§8; CP-2856 扩展 FAIL 字段):
  *   success  → {ok, method, verdict, comment{id,self},
  *                transition{id, name, to, toCategory} (PASS only) /
- *                label, assigneeCleared (FAIL only)}
+ *                labels: [escalated, failed], assigneeCleared (FAIL only)}
  *              summary 块去除; FAIL 成功路径 hint 去除 (语义冗余于 label
  *              反馈, 草稿池已定); partial 分支结构 0 改动 (error + hint
- *              完整保留, CP-2710 红线 #28510)
+ *              完整保留, CP-2710 红线 #28510); CP-2856: 顶层 `label`
+ *              单数字段 → `labels` 数组 (FAIL only); PASS 路径 0 改动.
  *   details  → <100 字符一句话语义摘要; success PASS 例
  *                "CP-2690 已 PASS: 评论已发 + 转「已完成」"
  *              success FAIL 例
- *                "CP-2690 已 FAIL: escalated 已标 + assignee 已清"
+ *                "CP-2690 已 FAIL: escalated + failed 已标 + assignee 已清"
  *              partial 例
  *                "CP-2690 部分完成: 评论已发但转态失败, 见 hint"
  *              rejection (verdict↔summary 不一致) 例
@@ -62,6 +65,10 @@ import type { ToolResult } from "../types.js";
 
 type Verdict = "PASS" | "FAIL";
 const ESCALATED_LABEL = "escalated";
+// CP-2856 / planner A+E v0.11 §3 改动 C + §7.3: "failed" 是持久失败事实 label,
+// 与 "escalated" 瞬时派发信号共存。abandon_task 默认只 remove escalated,
+// failed 天然保留 → E 表 done 状态可区分来源 (escalated-only vs escalated+failed)。
+const FAILED_LABEL = "failed";
 
 // ─── FAIL keyword whitelist (mirror CP-1918 verdict_guard.py L42-46) ─────────
 // Empirically, tester / reviewer agents write "FAIL" (literal ASCII) /
@@ -239,8 +246,16 @@ export async function submitVerdict(
 }
 
 /**
- * FAIL continuation: add the "escalated" label and clear the assignee.
- * Mirrors what escalate_task used to do in step 3+4 (label + assignee clear after comment).
+ * FAIL continuation: add the "escalated" + "failed" labels and clear the
+ * assignee. Mirrors what escalate_task used to do in step 3+4 (label +
+ * assignee clear after comment).
+ *
+ * CP-2856 / planner A+E v0.11 §3 改动 C + §7.2 改动 9 + §7.3 label 语义
+ * 分离: FAIL verdict 同时加 "escalated" (瞬时派发信号, routing/JQL/
+ * 父任务门只认这个) + "failed" (持久失败事实, E 表 done 状态可区分
+ * 来源, abandon_task 0 改动 → 默认只 remove escalated, failed 天然
+ * 保留). 两个 label 在同一次 PUT 的 `update.labels` 数组里 add,
+ * Jira 把它当 set 操作, 顺序无关, 原子.
  */
 async function escalateAfterComment(
   cfg: ReturnType<typeof loadConfig>,
@@ -251,7 +266,9 @@ async function escalateAfterComment(
   let labelOk = false
   try {
     await jiraPut(cfg, `issue/${issueIdOrKey}`, {
-      update: { labels: [{ add: ESCALATED_LABEL }] },
+      update: {
+        labels: [{ add: ESCALATED_LABEL }, { add: FAILED_LABEL }],
+      },
     })
     labelOk = true
   } catch (err) {
@@ -264,12 +281,12 @@ async function escalateAfterComment(
         verdict: "FAIL",
         comment: { id: commentId, self: commentSelf },
         error:
-          `jira.submit_verdict (verdict=FAIL, step 2: add label) failed: ${msg}. ` +
-          `Verdict comment was already posted; label was NOT added; assignee NOT cleared. ` +
+          `jira.submit_verdict (verdict=FAIL, step 2: add labels [${ESCALATED_LABEL}, ${FAILED_LABEL}]) failed: ${msg}. ` +
+          `Verdict comment was already posted; labels were NOT added; assignee NOT cleared. ` +
           `Re-run submit_verdict with the same args to retry — the comment step is idempotent at ` +
           `the UI level but will post a duplicate ADF comment on Jira.`,
       },
-      `${issueIdOrKey} 部分完成: 评论已发但 escalated label 添加失败, 见 hint`,
+      `${issueIdOrKey} 部分完成: 评论已发但 escalated/failed label 添加失败, 见 hint`,
     )
   }
 
@@ -288,15 +305,15 @@ async function escalateAfterComment(
         partial: true,
         verdict: "FAIL",
         comment: { id: commentId, self: commentSelf },
-        label: ESCALATED_LABEL,
+        labels: [ESCALATED_LABEL, FAILED_LABEL],
         hint:
-          `Verdict comment + "${ESCALATED_LABEL}" label already applied. To finish, run: ` +
+          `Verdict comment + [${ESCALATED_LABEL}, ${FAILED_LABEL}] labels already applied. To finish, run: ` +
           `jira { method: "update", args: { issueIdOrKey: "${issueIdOrKey}", fields: { assignee: null } } }`,
         error:
           `jira.submit_verdict (verdict=FAIL, step 3: clear assignee) failed: ${msg}. ` +
-          `Comment and label already applied; assignee NOT cleared.`,
+          `Comment and labels already applied; assignee NOT cleared.`,
       },
-      `${issueIdOrKey} 部分完成: 评论 + label 已应用但清 assignee 失败, 见 hint`,
+      `${issueIdOrKey} 部分完成: 评论 + labels 已应用但清 assignee 失败, 见 hint`,
     )
   }
 
@@ -306,10 +323,10 @@ async function escalateAfterComment(
       method: "submit_verdict",
       verdict: "FAIL",
       comment: { id: commentId, self: commentSelf },
-      label: ESCALATED_LABEL,
+      labels: [ESCALATED_LABEL, FAILED_LABEL],
       assigneeCleared: true,
     },
-    `${issueIdOrKey} 已 FAIL: escalated 已标 + assignee 已清`,
+    `${issueIdOrKey} 已 FAIL: escalated + failed 已标 + assignee 已清`,
   )
 }
 

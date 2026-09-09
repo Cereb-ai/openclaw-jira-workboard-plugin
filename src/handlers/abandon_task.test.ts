@@ -261,4 +261,69 @@ describe("abandon_task (CP-2710 batch 3)", () => {
     expect(typeof result.details).toBe("string");
     expect((result.details as string).length).toBeLessThan(100);
   });
+
+  // CP-2856 / planner A+E v0.11 §7.3: "failed" 是持久失败事实 label,
+  // abandon 默认只 remove "escalated", "failed" 天然保留 → E 表 done
+  // 状态可区分来源. 锁定语义: abandon_task 绝不触碰 "failed" label.
+  it("AC-2856-AT-1 (CP-2856 AC4 failed 保留语义): labels PUT payload 仅 remove 'escalated', 不含 'failed'", async () => {
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      fields: { issuetype: { subtask: true, name: "Sub-task" } },
+    });
+    vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" });
+    vi.mocked(jiraPut).mockResolvedValueOnce({}); // clear assignee
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      transitions: [{ id: "31", name: "Done", to: { name: "已完成" } }],
+    });
+    vi.mocked(jiraPost).mockResolvedValueOnce({}); // transition execute
+    vi.mocked(jiraPut).mockResolvedValueOnce({}); // remove labels
+
+    await abandonTask({
+      issueIdOrKey: "CP-2856",
+      reason: "re-planning after FAIL verdict",
+    });
+
+    // 捕获最后一次 PUT (remove labels), 断言 payload 仅含 remove "escalated"
+    const putCalls = vi.mocked(jiraPut).mock.calls;
+    const labelsPut = putCalls[putCalls.length - 1][2] as {
+      update?: { labels?: Array<{ remove?: string; add?: string }> };
+    };
+    expect(labelsPut.update?.labels).toBeDefined();
+    const labelOps = labelsPut.update?.labels ?? [];
+    // 仅 remove "escalated"
+    expect(labelOps).toEqual([{ remove: "escalated" }]);
+    // 反断言: 不能 remove "failed", 也不能 add "failed"
+    const removed = labelOps.map((op) => op.remove).filter(Boolean);
+    expect(removed).not.toContain("failed");
+    const added = labelOps.map((op) => op.add).filter(Boolean);
+    expect(added).not.toContain("failed");
+  });
+
+  it("AC-2856-AT-2 (CP-2856 AC4 failed 保留语义): 显式 caller 传 labels=['failed'] 仍按 caller 传的执行 (但默认 0 调用就是 ['escalated'])", async () => {
+    // 锁 caller 可显式控制: 语义不变, abandon_task 不会偷偷加 'failed' 到默认列表.
+    // 默认行为 (无 labels 参数) 已在 AC-2856-AT-1 锁定.
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      fields: { issuetype: { subtask: true, name: "Sub-task" } },
+    });
+    vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" });
+    vi.mocked(jiraPut).mockResolvedValueOnce({}); // clear assignee
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      transitions: [{ id: "31", name: "Done", to: { name: "已完成" } }],
+    });
+    vi.mocked(jiraPost).mockResolvedValueOnce({});
+    vi.mocked(jiraPut).mockResolvedValueOnce({}); // remove labels
+
+    await abandonTask({
+      issueIdOrKey: "CP-2856",
+      reason: "x",
+      // 不传 labels, 走 DEFAULT_LABELS_TO_REMOVE = ['escalated']
+    });
+
+    const putCalls = vi.mocked(jiraPut).mock.calls;
+    const labelsPut = putCalls[putCalls.length - 1][2] as {
+      update?: { labels?: Array<{ remove?: string }> };
+    };
+    const labelOps = labelsPut.update?.labels ?? [];
+    // 0 出现 'failed'
+    expect(labelOps.map((op) => op.remove)).toEqual(["escalated"]);
+  });
 });
