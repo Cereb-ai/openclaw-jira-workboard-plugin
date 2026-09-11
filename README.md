@@ -59,12 +59,29 @@ systemctl --user restart openclaw-gateway.service
 
 ## Configuration
 
-The plugin reads config in this order (highest priority first):
+The plugin reads config in this order (highest priority first, CP-2955 env-first):
 
-1. `plugins.entries.jira-openclaw-plugin.config` in `~/.openclaw/openclaw.json`
-2. Environment variables (`ATST_TOKEN`, `JIRA_CLOUD_ID`, `JIRA_PROXY`)
+1. Per-call explicit argument (for tools that accept it)
+2. Environment variables (`JIRA_ATST_TOKEN` preferred / `ATST_TOKEN` legacy, `JIRA_CLOUD_ID`, `JIRA_PROXY`)
+3. `plugins.entries.jira-openclaw-plugin.config` in `~/.openclaw/openclaw.json` — **last-resort fallback**; missing file is silently treated as empty
 
-### `~/.openclaw/openclaw.json`
+Both the MCP (OpenClaw gateway) path and the CLI (`jira-tool`) path resolve via the same env-first ordering — one env block works for either path.
+
+### Environment variables
+
+| variable | required | default | description |
+|---|---|---|---|
+| `JIRA_ATST_TOKEN` | ✅ | — | OAuth 2.0 3LO access token (Bearer header). **Preferred name** — matches the K8s chart env injection. |
+| `ATST_TOKEN` | ✅ (legacy alias) | — | OAuth 2.0 3LO access token. Used as fallback when `JIRA_ATST_TOKEN` is unset. |
+| `JIRA_CLOUD_ID` | ✅ | — | Atlassian Cloud ID (UUID) |
+| `JIRA_PROXY` | ❌ | (none — direct connection) | HTTP proxy URL (e.g. `http://proxy.example.com:8080`) |
+| `JIRA_DEFAULT_ASSIGNEE_ACCOUNT_ID` | ❌ | — | Optional. Default assignee for `jira_create_task` / `jira_create_subtask`. |
+
+Any missing required variable → fail-fast at startup with an actionable error pointing at the missing env var name and an `export` example.
+
+### `~/.openclaw/openclaw.json` (optional, last-resort fallback)
+
+Only consulted when the env vars above are empty. Useful for local-dev overrides; **not required** for the CLI to work.
 
 ```json
 {
@@ -82,16 +99,6 @@ The plugin reads config in this order (highest priority first):
   }
 }
 ```
-
-### Environment variables
-
-| variable | required | default | description |
-|---|---|---|---|
-| `ATST_TOKEN` | ✅ | — | OAuth 2.0 3LO access token (Bearer header) |
-| `JIRA_CLOUD_ID` | ✅ | — | Atlassian Cloud ID (UUID) |
-| `JIRA_PROXY` | ❌ | (none — direct connection) | HTTP proxy URL (e.g. `http://proxy.example.com:8080`) |
-
-Any missing required variable → fail-fast at startup with an actionable error pointing at the missing field.
 
 ## Usage
 

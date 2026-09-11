@@ -10,8 +10,10 @@
  *   - Local agent behavior testing (e.g. before re-enabling the plugin).
  *
  * Reuses the same handler / auth stack as the OpenClaw native tools —
- * there is no separate API client. Reads env (ATST_TOKEN / JIRA_CLOUD_ID /
- * JIRA_PROXY) the same way as the OpenClaw entry point, so no new config.
+ * there is no separate API client. Reads env (JIRA_ATST_TOKEN / ATST_TOKEN /
+ * JIRA_CLOUD_ID / JIRA_PROXY) the same way as the OpenClaw entry point, so
+ * a single env block works for both MCP and CLI paths — see auth.ts
+ * (CP-2955 env-first resolution).
  *
  * Method names are 100% aligned with the OpenClaw MCP tools: both the
  * MCP names (jira_search / jira_get / ...) and the short names
@@ -98,10 +100,11 @@ function printUsage(): void {
       `Methods (${Object.keys(HANDLERS).length}):`,
       ...Object.keys(HANDLERS).map((m) => `  ${m}`),
       ``,
-      `Env (same as OpenClaw plugin):`,
-      `  ATST_TOKEN     OAuth 2.0 3LO access token (required)`,
-      `  JIRA_CLOUD_ID  Atlassian Cloud ID (required)`,
-      `  JIRA_PROXY     HTTP proxy URL (optional, default http://proxy.example.com:8080)`,
+      `Env (same as OpenClaw plugin — CP-2955 env-first):`,
+      `  JIRA_ATST_TOKEN OAuth 2.0 3LO access token (required, preferred name)`,
+      `  ATST_TOKEN      OAuth 2.0 3LO access token (required, legacy alias)`,
+      `  JIRA_CLOUD_ID   Atlassian Cloud ID (required)`,
+      `  JIRA_PROXY      HTTP proxy URL (optional, default = direct connection)`,
       ``,
       `Output: JSON to stdout on success; non-zero exit + JSON error on stderr on failure.`,
     ].join("\n"),
