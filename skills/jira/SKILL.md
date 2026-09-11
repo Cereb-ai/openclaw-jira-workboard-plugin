@@ -43,6 +43,18 @@ jira-tool --help
 
 命令退出码: `0`=成功, `5`=业务错误, `2`=JSON 解析错, `1`=无参数.
 
+> ✅ **CLI 无需设任何 env**：token / cloudId 从 `~/.openclaw/openclaw.json` 的 `plugins.entries.jira-openclaw-plugin.config` 读取（env `ATST_TOKEN` 只是兜底层级）。**排查 CLI 问题不要往 env 方向猜**（容器注入的是 `JIRA_ATST_TOKEN`，CLI 不读这个名字，但也不影响 —— 走 openclaw.json 兜底即可工作）。
+
+> ⚠️ **CLI 输出是插件包裹格式**：stdout 为 `{"content":[{"type":"text","text":"<真 JSON 字符串>"}]}` —— **真 JSON 在 `content[0].text` 里，需解包两次**才能取字段：
+>
+> ```bash
+> jira-tool get '{"issueIdOrKey":"CP-1"}' | python3 -c "import json,sys;d=json.load(sys.stdin);d=json.loads(d['content'][0]['text']);print(d['issue']['fields']['summary'])"
+> ```
+>
+> 直接用 `json.load` 只看顶层会拿到包裹壳（不是票数据）—— 这是最常见的“结果全 0 / 字段取不到”误判来源。
+
+> ⚠️ **JQL 检索坑**：本租户 JQL **不认 issue type 中文名**（`issuetype = 子任务` 返回 0）。找某票的子任务用 **`parent = <KEY>`**（已验证可用）；不确定连通性时先用 `key = <KEY>` 验证。
+
 > **`jira_create_task` / `jira_create_subtask` 的 `requirements` / `scope` / `acceptance_criteria` 3 字段全是纯文本字符串, 不是 ADF dict, 不是数组.** plugin 自动按 `## 任务说明 / ## 职责范围 / ## 验收标准` 3 段拼接成 description. 用 `\n` 换行.
 >
 > **`jira_comment` 的 `body` 也是纯文本 string, 不是 ADF dict.** plugin 自动包成 ADF. 用 `\n` 换行. **agent 永远不需要知道 ADF**.
