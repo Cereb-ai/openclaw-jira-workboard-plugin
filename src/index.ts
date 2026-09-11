@@ -41,16 +41,16 @@ export default defineToolPlugin({
   id: "jira-openclaw-plugin",
   name: "Jira",
   description:
-    "Jira Cloud REST v3 native tools (14 methods, each is a named tool): jira_search / jira_get / jira_list_comments / jira_get_comment / jira_comment / jira_list_attachments / jira_get_attachment / jira_upload_attachment / jira_transition / jira_create_task / jira_create_subtask / jira_submit_verdict / jira_abandon_task / jira_request_help. Two invocation paths: native OpenClaw agents call these MCP tools directly; non-native agents (e.g. codex) use the jira-tool binary with the SAME method names (jira_* or short aliases) — see skills/jira/SKILL.md. Reads ATST_TOKEN / JIRA_CLOUD_ID / JIRA_PROXY from env.",
+    "Jira Cloud REST v3 native tools (14 methods, each is a named tool): jira_search / jira_get / jira_list_comments / jira_get_comment / jira_comment / jira_list_attachments / jira_get_attachment / jira_upload_attachment / jira_transition / jira_create_task / jira_create_subtask / jira_submit_verdict / jira_abandon_task / jira_request_help. Two invocation paths: native OpenClaw agents call these MCP tools directly; non-native agents (e.g. codex) use the jira-tool binary with the SAME method names (jira_* or short aliases) — see skills/jira/SKILL.md. Resolution is env-first (CP-2955): reads JIRA_ATST_TOKEN (or legacy ATST_TOKEN) / JIRA_CLOUD_ID (+ optional JIRA_PROXY) from env; openclaw.json config is a last-resort fallback.",
   configSchema: Type.Object({
     atstToken: Type.Optional(
-      Type.String({ description: "(optional) Override ATST_TOKEN env var" }),
+      Type.String({ description: "(optional, last-resort fallback) Override JIRA_ATST_TOKEN env var (preferred name; legacy ATST_TOKEN also accepted)" }),
     ),
     cloudId: Type.Optional(
-      Type.String({ description: "(optional) Override JIRA_CLOUD_ID env var" }),
+      Type.String({ description: "(optional, last-resort fallback) Override JIRA_CLOUD_ID env var" }),
     ),
     proxy: Type.Optional(
-      Type.String({ description: "(optional) Override JIRA_PROXY env var" }),
+      Type.String({ description: "(optional, last-resort fallback) Override JIRA_PROXY env var" }),
     ),
   }),
   tools: (tool) => [

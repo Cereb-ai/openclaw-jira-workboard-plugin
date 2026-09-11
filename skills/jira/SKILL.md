@@ -43,7 +43,7 @@ jira-tool --help
 
 命令退出码: `0`=成功, `5`=业务错误, `2`=JSON 解析错, `1`=无参数.
 
-> ✅ **CLI 无需设任何 env**：token / cloudId 从 `~/.openclaw/openclaw.json` 的 `plugins.entries.jira-openclaw-plugin.config` 读取（env `ATST_TOKEN` 只是兜底层级）。**排查 CLI 问题不要往 env 方向猜**（容器注入的是 `JIRA_ATST_TOKEN`，CLI 不读这个名字，但也不影响 —— 走 openclaw.json 兜底即可工作）。
+> ✅ **CLI 用 env 即可运行**（CP-2955 env-first）：token / cloudId 直接从 env 读取（首选 `JIRA_ATST_TOKEN` / `JIRA_CLOUD_ID`，token 兼容旧名 `ATST_TOKEN`），`~/.openclaw/openclaw.json` 仅作为最后兜底（文件缺失不报错）。CI / 独立 CLI 环境不需要 openclaw.json，只需 `export JIRA_ATST_TOKEN=...; export JIRA_CLOUD_ID=...` 即可。
 
 > ⚠️ **CLI 输出是插件包裹格式**：stdout 为 `{"content":[{"type":"text","text":"<真 JSON 字符串>"}]}` —— **真 JSON 在 `content[0].text` 里，需解包两次**才能取字段：
 >
@@ -1136,10 +1136,18 @@ assert not problems, problems  # OK 才发
 
 | env | required | default | 说明 |
 |---|---|---|---|
-| `ATST_TOKEN` | ✅ | — | OAuth 2.0 3LO access token (Bearer 头) |
+| `JIRA_ATST_TOKEN` | ✅ | — | OAuth 2.0 3LO access token (Bearer 头)。**首选名**（与 K8s chart env 注入名一致） |
+| `ATST_TOKEN` | ✅ | — | OAuth 2.0 3LO access token。**旧名兼容**——若 `JIRA_ATST_TOKEN` 未设则降级到此名（向后兼容老 env 块） |
 | `JIRA_CLOUD_ID` | ✅ | — | Atlassian Cloud ID (UUID) |
-| `JIRA_PROXY` | ❌ | `http://proxy.example.com:8080` | HTTP 代理 |
+| `JIRA_PROXY` | ❌ | (空 = 直连) | HTTP 代理 |
+| `JIRA_DEFAULT_ASSIGNEE_ACCOUNT_ID` | ❌ | (空 = 不自动 assignee) | orchestrator `create_task` / `create_subtask` 隐式 assignee |
 
-任一 required env 未设 → 启动时 fail-fast 返清晰错误，不静默退化。
+任一 required env 未设 → 启动时 fail-fast 返清晰错误，不静默退化。错误信息明确指出缺失的 env 名字 + 给出 `export` 示例。
 
-openclaw.json 的 `plugins.entries.jira-openclaw-plugin.config` 字段 (atstToken / cloudId / proxy) 优先于 env 变量（用于本地 dev override）。
+**解析顺序 (CP-2955 env-first)**：显式 per-call 参数 > `process.env` > `openclaw.json` 兜底。
+
+- **token**: 显式 cfg > `JIRA_ATST_TOKEN` > `ATST_TOKEN` > `~/.openclaw/openclaw.json` `plugins.entries.jira-openclaw-plugin.config.atstToken`
+- **cloudId**: 显式 cfg > `JIRA_CLOUD_ID` > openclaw.json `config.cloudId`
+- **proxy**: 显式 cfg > `JIRA_PROXY` > openclaw.json `config.proxy`
+
+env 永远赢（openclaw.json 仅作最后兜底；文件缺失不报错）。CLI（`jira-tool`）和 MCP（OpenClaw gateway）走同一套解析——env 块写一次，两条路径都生效。
