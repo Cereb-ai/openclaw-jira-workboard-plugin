@@ -220,7 +220,7 @@ export default defineToolPlugin({
       description:
         "Create a main task (locks template + plan label + optional assignee/block). requirements/scope/acceptance_criteria are 3 plain-text strings wrapped into the 3-section description template; text is NOT echoed. Returns {ok, method, request{project, summary, labels}, issue{id, key, self}, block?, block_errors?}. details = one-line summary.",
       parameters: Type.Object({
-        project: Type.String({ description: "Project key, e.g. 'WTO'" }),
+        project: IdParam({ description: "Project key, e.g. 'WTO' (string or number; normalized to a string)." }),
         summary: Type.String({ description: "Task summary" }),
         requirements: Type.String({
           description:
@@ -260,8 +260,8 @@ export default defineToolPlugin({
       description:
         "Create a subtask under parent (locks template + label + assignee + optional block). Returns {ok, method, request{parent, summary, labels}, issue{id, key, self}, block?, block_errors?}. requirements/scope/acceptance_criteria text is NOT echoed. details = one-line summary.",
       parameters: Type.Object({
-        project: Type.String({ description: "Project key" }),
-        parent: Type.String({ description: "Parent issue key" }),
+        project: IdParam({ description: "Project key (string or number; normalized to a string)." }),
+        parent: IdParam({ description: "Parent issue key (string or number; normalized to a string)." }),
         summary: Type.String({ description: "Subtask summary" }),
         requirements: Type.String({
           description:

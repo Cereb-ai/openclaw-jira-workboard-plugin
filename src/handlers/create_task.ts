@@ -40,7 +40,7 @@ import { jiraPost, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
 import { buildTaskDescription } from "./_adf.js";
 import { block } from "./block.js";
-import { normalizeBlockParam, normalizeStringArray } from "../normalize.js";
+import { normalizeBlockParam, normalizeId, normalizeStringArray } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 const DEFAULT_LABELS = ["plan"];
@@ -62,13 +62,23 @@ export async function createTask(
 
   // project is the only "context" field the caller still has to pass.
   // Template / structure / assignee / labels are all locked below.
-  const project = args.project;
-  if (typeof project !== "string" || project.trim().length === 0) {
+  // CP-3758: `project` is an ID-class parameter — accepts string | number
+  // (a numeric project id arrives as `10000`) and is normalized to a
+  // trimmed string BEFORE the REST call. Illegal types (object / array /
+  // boolean / null) are still rejected with an actionable error — never
+  // silently `String()`-ed.
+  const projectNorm = normalizeId(args.project, "project");
+  if (!projectNorm.ok) {
     return textResult(
-      { error: "create_task requires `project` (string, project key, e.g. 'WTO')." },
+      {
+        error:
+          "create_task requires `project` (project key, e.g. 'WTO'; string or number). " +
+          projectNorm.error,
+      },
       "jira_create_task 失败: 缺 project",
     );
   }
+  const project = projectNorm.value;
   const summary = args.summary;
   if (typeof summary !== "string" || summary.trim().length === 0) {
     return textResult(

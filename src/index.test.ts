@@ -201,3 +201,43 @@ describe("CP-3751 — schema layer keeps content fields strict", () => {
     ).toBe(false);
   });
 });
+
+/**
+ * CP-3758 — R1 follow-up of CP-3751 (schema layer).
+ *
+ * `create_task.project` / `create_subtask.project` / `create_subtask.parent`
+ * stayed `Type.String()` in the CP-3751 pass, so a numeric project / parent
+ * was rejected by the TypeBox validator BEFORE the handler could normalize
+ * it. These tests run against the REAL compiled tool schemas.
+ */
+describe("CP-3758 — project / parent accept string | number at the schema layer", () => {
+  const createTaskBase = {
+    summary: "s",
+    requirements: "r",
+    scope: "sc",
+    acceptance_criteria: "ac",
+  };
+
+  it("AC-3758-S-1: create_task.project accepts a string, a number and a padded string", () => {
+    expect(accepts("jira_create_task", { ...createTaskBase, project: "CP" })).toBe(true);
+    expect(accepts("jira_create_task", { ...createTaskBase, project: 10000 })).toBe(true);
+    expect(accepts("jira_create_task", { ...createTaskBase, project: " CP " })).toBe(true);
+  });
+
+  it("AC-3758-S-2: create_subtask.project / .parent accept a string, a number and a padded string", () => {
+    const base = { ...createTaskBase, labels: ["code"] };
+    expect(accepts("jira_create_subtask", { ...base, project: "CP", parent: "CP-1" })).toBe(true);
+    expect(accepts("jira_create_subtask", { ...base, project: 10000, parent: 24180 })).toBe(true);
+    expect(accepts("jira_create_subtask", { ...base, project: " CP ", parent: " CP-1 " })).toBe(true);
+    // Mixed: numeric parent + string project.
+    expect(accepts("jira_create_subtask", { ...base, project: "CP", parent: 24180 })).toBe(true);
+  });
+
+  it("AC-3758-S-3: an object / array project or parent is still rejected", () => {
+    expect(accepts("jira_create_task", { ...createTaskBase, project: { a: 1 } })).toBe(false);
+    expect(accepts("jira_create_task", { ...createTaskBase, project: ["CP"] })).toBe(false);
+    const base = { ...createTaskBase, labels: ["code"] };
+    expect(accepts("jira_create_subtask", { ...base, project: "CP", parent: { a: 1 } })).toBe(false);
+    expect(accepts("jira_create_subtask", { ...base, project: { a: 1 }, parent: "CP-1" })).toBe(false);
+  });
+});

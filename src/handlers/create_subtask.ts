@@ -35,7 +35,7 @@ import { jiraPost, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
 import { buildTaskDescription } from "./_adf.js";
 import { block } from "./block.js";
-import { normalizeBlockParam, normalizeStringArray } from "../normalize.js";
+import { normalizeBlockParam, normalizeId, normalizeStringArray } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 const SUBTASK_TYPE_NAME = "子任务";
@@ -53,28 +53,37 @@ export async function createSubtask(
     );
   }
 
-  const parent = args.parent;
-  if (typeof parent !== "string" || parent.trim().length === 0) {
+  // CP-3758: `parent` / `project` are ID-class parameters — accept string |
+  // number (a numeric issue id arrives as `24180`) and are normalized to
+  // trimmed strings BEFORE the REST call. Illegal types (object / array /
+  // boolean / null) are still rejected with an actionable error — never
+  // silently `String()`-ed.
+  const parentNorm = normalizeId(args.parent, "parent");
+  if (!parentNorm.ok) {
     return textResult(
       {
         error:
-          "create_subtask requires `parent` (string, parent issue key, e.g. 'WTO-100').",
+          "create_subtask requires `parent` (parent issue key, e.g. 'WTO-100'; string or number). " +
+          parentNorm.error,
       },
       "jira_create_subtask 失败: 缺 parent",
     );
   }
-  const project = args.project;
-  if (typeof project !== "string" || project.trim().length === 0) {
+  const parent = parentNorm.value;
+  const projectNorm = normalizeId(args.project, "project");
+  if (!projectNorm.ok) {
     return textResult(
       {
         error:
-          "create_subtask requires `project` (string, project key, e.g. 'WTO'). " +
+          "create_subtask requires `project` (project key, e.g. 'WTO'; string or number). " +
           "Jira does not reliably infer the project from the parent key — " +
-          "match what you'd pass to create_task.",
+          "match what you'd pass to create_task. " +
+          projectNorm.error,
       },
       "jira_create_subtask 失败: 缺 project",
     );
   }
+  const project = projectNorm.value;
   const summary = args.summary;
   if (typeof summary !== "string" || summary.trim().length === 0) {
     return textResult(

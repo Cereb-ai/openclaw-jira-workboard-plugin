@@ -433,3 +433,238 @@ describe("CP-3751 — content fields stay strict", () => {
     expect(jiraPost).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * CP-3758 — R1 follow-up of CP-3751.
+ *
+ * The CP-3751 pass widened the ID class everywhere EXCEPT
+ * `create_task.project` / `create_subtask.project` / `create_subtask.parent`,
+ * which stayed `Type.String()` in the schema and were hard-rejected by the
+ * handlers' `typeof !== "string"` guard. That contradicted CHANGELOG.md /
+ * README.md / skills/jira/SKILL.md, which already claimed `project` and
+ * `parent` accept string | number — and pushed agents straight into the
+ * runtime's hard circuit breaker.
+ *
+ * Contract proved here:
+ *   - a NUMBER project / parent is normalized to a string and lands in the
+ *     REST body as `fields.project.key` / `fields.parent.key`;
+ *   - the number form and the equivalent string form produce a
+ *     BYTE-IDENTICAL REST payload;
+ *   - illegal types (object / array / boolean / null / empty string) are
+ *     still rejected with an actionable error (never silently String()-ed);
+ *   - content fields (summary / requirements / …) are untouched.
+ */
+describe("CP-3758 — project / parent are ID-class parameters", () => {
+  beforeEach(() => {
+    vi.mocked(jiraPost).mockReset();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("AC-3751-21: jira_create_task accepts a NUMBER project and normalizes it into fields.project.key", async () => {
+    vi.mocked(jiraPost).mockResolvedValueOnce({
+      id: "1",
+      key: "TEST-21",
+      self: "https://example/issue/TEST-21",
+    });
+
+    const result = await createTask({
+      project: 10000,
+      summary: "a task",
+      requirements: "why",
+      scope: "负责: x",
+      acceptance_criteria: "AC1: y",
+    });
+    const p = parsed(result);
+
+    expect(p.ok).toBe(true);
+    // The REST body must carry the NORMALIZED string key.
+    const fields = (
+      vi.mocked(jiraPost).mock.calls[0][2] as {
+        fields: { project: { key: string } };
+      }
+    ).fields;
+    expect(fields.project).toEqual({ key: "10000" });
+    // The request echo carries the normalized value too.
+    expect(p.request.project).toBe("10000");
+  });
+
+  it("AC-3751-21b: a padded string project is trimmed and reaches the REST body trimmed", async () => {
+    vi.mocked(jiraPost).mockResolvedValueOnce({
+      id: "1",
+      key: "TEST-21b",
+      self: "https://example/issue/TEST-21b",
+    });
+
+    const result = await createTask({
+      project: "  WTO  ",
+      summary: "a task",
+      requirements: "why",
+      scope: "负责: x",
+      acceptance_criteria: "AC1: y",
+    });
+    const p = parsed(result);
+
+    expect(p.ok).toBe(true);
+    const fields = (
+      vi.mocked(jiraPost).mock.calls[0][2] as {
+        fields: { project: { key: string } };
+      }
+    ).fields;
+    expect(fields.project).toEqual({ key: "WTO" });
+    expect(p.request.project).toBe("WTO");
+  });
+
+  it("AC-3751-21c: the number form and the string form produce a byte-identical REST body", async () => {
+    const base = {
+      summary: "a task",
+      requirements: "why",
+      scope: "负责: x",
+      acceptance_criteria: "AC1: y",
+    };
+
+    vi.mocked(jiraPost).mockResolvedValueOnce({
+      id: "1",
+      key: "TEST-21c",
+      self: "https://example/issue/TEST-21c",
+    });
+    const numeric = await createTask({ ...base, project: 10000 });
+
+    vi.mocked(jiraPost).mockResolvedValueOnce({
+      id: "1",
+      key: "TEST-21c",
+      self: "https://example/issue/TEST-21c",
+    });
+    const asString = await createTask({ ...base, project: "10000" });
+
+    const numericBody = JSON.stringify(vi.mocked(jiraPost).mock.calls[0][2]);
+    const stringBody = JSON.stringify(vi.mocked(jiraPost).mock.calls[1][2]);
+    expect(numericBody).toBe(stringBody);
+    expect(JSON.stringify(parsed(numeric))).toBe(JSON.stringify(parsed(asString)));
+  });
+
+  it("AC-3751-21d: an illegal project type is rejected (object / array / boolean / null / empty string)", async () => {
+    for (const bad of [{ a: 1 }, ["WTO"], true, null, "", "   "]) {
+      const result = await createTask({
+        project: bad,
+        summary: "a task",
+        requirements: "why",
+        scope: "负责: x",
+        acceptance_criteria: "AC1: y",
+      } as Record<string, unknown>);
+      const p = parsed(result);
+      expect(p.error).toMatch(/project/);
+      expect(p.ok).toBeUndefined();
+    }
+    expect(jiraPost).not.toHaveBeenCalled();
+  });
+
+  it("AC-3751-22: jira_create_subtask accepts a NUMBER parent and project and normalizes both into the REST body", async () => {
+    vi.mocked(jiraPost).mockResolvedValueOnce({
+      id: "1",
+      key: "TEST-22",
+      self: "https://example/issue/TEST-22",
+    });
+
+    const result = await createSubtask({
+      project: 10000,
+      parent: 24180,
+      summary: "a subtask",
+      requirements: "why",
+      scope: "负责: x",
+      acceptance_criteria: "AC1: y",
+      labels: ["code"],
+    });
+    const p = parsed(result);
+
+    expect(p.ok).toBe(true);
+    const fields = (
+      vi.mocked(jiraPost).mock.calls[0][2] as {
+        fields: { project: { key: string }; parent: { key: string } };
+      }
+    ).fields;
+    expect(fields.project).toEqual({ key: "10000" });
+    expect(fields.parent).toEqual({ key: "24180" });
+    expect(p.request.parent).toBe("24180");
+  });
+
+  it("AC-3751-22b: the number form and the string form produce a byte-identical REST body", async () => {
+    const base = {
+      summary: "a subtask",
+      requirements: "why",
+      scope: "负责: x",
+      acceptance_criteria: "AC1: y",
+      labels: ["code"],
+    };
+
+    vi.mocked(jiraPost).mockResolvedValueOnce({
+      id: "1",
+      key: "TEST-22b",
+      self: "https://example/issue/TEST-22b",
+    });
+    const numeric = await createSubtask({
+      ...base,
+      project: 10000,
+      parent: 24180,
+    });
+
+    vi.mocked(jiraPost).mockResolvedValueOnce({
+      id: "1",
+      key: "TEST-22b",
+      self: "https://example/issue/TEST-22b",
+    });
+    const asString = await createSubtask({
+      ...base,
+      project: "10000",
+      parent: "24180",
+    });
+
+    const numericBody = JSON.stringify(vi.mocked(jiraPost).mock.calls[0][2]);
+    const stringBody = JSON.stringify(vi.mocked(jiraPost).mock.calls[1][2]);
+    expect(numericBody).toBe(stringBody);
+    expect(JSON.stringify(parsed(numeric))).toBe(JSON.stringify(parsed(asString)));
+  });
+
+  it("AC-3751-22c: an illegal parent / project type is rejected", async () => {
+    const base = {
+      summary: "a subtask",
+      requirements: "why",
+      scope: "负责: x",
+      acceptance_criteria: "AC1: y",
+      labels: ["code"],
+    };
+    for (const bad of [{ a: 1 }, ["TEST-1"], true, null, "", "  "]) {
+      const badParent = await createSubtask({
+        ...base,
+        project: "TEST",
+        parent: bad,
+      } as Record<string, unknown>);
+      expect(parsed(badParent).error).toMatch(/parent/);
+
+      const badProject = await createSubtask({
+        ...base,
+        project: bad,
+        parent: "TEST-1",
+      } as Record<string, unknown>);
+      expect(parsed(badProject).error).toMatch(/project/);
+    }
+    expect(jiraPost).not.toHaveBeenCalled();
+  });
+
+  it("AC-3751-22d: the normalization did NOT leak into the content fields", async () => {
+    const result = await createTask({
+      project: 10000,
+      summary: { a: 1 },
+      requirements: "why",
+      scope: "负责: x",
+      acceptance_criteria: "AC1: y",
+    } as Record<string, unknown>);
+    const p = parsed(result);
+
+    expect(p.error).toMatch(/summary/);
+    expect(p.ok).toBeUndefined();
+    expect(jiraPost).not.toHaveBeenCalled();
+  });
+});
