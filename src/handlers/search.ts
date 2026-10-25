@@ -28,6 +28,7 @@
 import { loadConfig } from "../auth.js";
 import { jiraGet, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
+import { normalizeInt, normalizeStringArray } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 const DEFAULT_FIELDS = [
@@ -54,13 +55,25 @@ export async function search(args: Record<string, unknown>): Promise<ToolResult>
       "jira_search 失败: 缺 jql",
     );
   }
-  const maxResults =
-    typeof args.maxResults === "number" && Number.isFinite(args.maxResults)
-      ? args.maxResults
-      : 30;
-  const fields = Array.isArray(args.fields)
-    ? (args.fields as unknown[]).filter((f): f is string => typeof f === "string")
-    : DEFAULT_FIELDS;
+  // CP-3751: maxResults accepts number | numeric string. An invalid value
+  // falls back to the default 30 (previous behavior) rather than erroring.
+  let maxResults = 30;
+  if (args.maxResults !== undefined && args.maxResults !== null) {
+    const norm = normalizeInt(args.maxResults, "maxResults", { min: 1 });
+    if (norm.ok) maxResults = norm.value;
+  }
+
+  // CP-3751: `fields` members accept string | number → normalized to
+  // string[]. Previously numeric members were silently DROPPED by the
+  // `.filter((f) => typeof f === "string")` — `fields: [10019]` produced a
+  // request with an empty field list.
+  let fields: string[] = DEFAULT_FIELDS;
+  if (args.fields !== undefined && args.fields !== null) {
+    const norm = normalizeStringArray(args.fields, "fields");
+    if (norm.ok) {
+      fields = norm.value;
+    }
+  }
 
   try {
     const data = (await jiraGet(cfg, "search/jql", {

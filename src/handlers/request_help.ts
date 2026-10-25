@@ -35,6 +35,7 @@ import { loadConfig } from "../auth.js";
 import { jiraGet, jiraPost, jiraPut, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
 import { buildRequestHelpComment, validateAdfContentNodes } from "./_adf.js";
+import { normalizeId } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 const WAIT_APPROVAL_LABEL = "wait-approval";
@@ -52,13 +53,15 @@ export async function requestHelp(
     );
   }
 
-  const issueIdOrKey = args.issueIdOrKey;
-  if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
+  // CP-3751: issueIdOrKey accepts string | number → normalized to string.
+  const issueIdOrKeyNorm = normalizeId(args.issueIdOrKey, "issueIdOrKey");
+  if (!issueIdOrKeyNorm.ok) {
     return textResult(
-      { error: "request_help requires a non-empty `issueIdOrKey` (string)." },
+      { error: issueIdOrKeyNorm.error },
       "jira_request_help 失败: 缺少 issueIdOrKey",
     );
   }
+  const issueIdOrKey = issueIdOrKeyNorm.value;
   const question = args.question;
   if (typeof question !== "string" || question.trim().length === 0) {
     return textResult(

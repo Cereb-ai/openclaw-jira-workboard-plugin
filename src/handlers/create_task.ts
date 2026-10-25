@@ -40,6 +40,7 @@ import { jiraPost, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
 import { buildTaskDescription } from "./_adf.js";
 import { block } from "./block.js";
+import { normalizeBlockParam, normalizeId, normalizeStringArray } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 const DEFAULT_LABELS = ["plan"];
@@ -61,13 +62,23 @@ export async function createTask(
 
   // project is the only "context" field the caller still has to pass.
   // Template / structure / assignee / labels are all locked below.
-  const project = args.project;
-  if (typeof project !== "string" || project.trim().length === 0) {
+  // CP-3758: `project` is an ID-class parameter — accepts string | number
+  // (a numeric project id arrives as `10000`) and is normalized to a
+  // trimmed string BEFORE the REST call. Illegal types (object / array /
+  // boolean / null) are still rejected with an actionable error — never
+  // silently `String()`-ed.
+  const projectNorm = normalizeId(args.project, "project");
+  if (!projectNorm.ok) {
     return textResult(
-      { error: "create_task requires `project` (string, project key, e.g. 'WTO')." },
+      {
+        error:
+          "create_task requires `project` (project key, e.g. 'WTO'; string or number). " +
+          projectNorm.error,
+      },
       "jira_create_task 失败: 缺 project",
     );
   }
+  const project = projectNorm.value;
   const summary = args.summary;
   if (typeof summary !== "string" || summary.trim().length === 0) {
     return textResult(
@@ -142,12 +153,20 @@ export async function createTask(
     typeof args.priority === "string" && args.priority.trim().length > 0
       ? args.priority
       : DEFAULT_PRIORITY;
-  const extraLabels =
-    Array.isArray(args.labels) && args.labels.length > 0
-      ? (args.labels as unknown[]).filter(
-          (l): l is string => typeof l === "string" && l.length > 0,
-        )
-      : [];
+  // CP-3751: `labels` members accept string | number → normalized to
+  // string[]. Previously numeric members were silently dropped, so
+  // `labels: [3740]` created the task with only the auto "plan" label.
+  const extraLabels: string[] = [];
+  if (args.labels !== undefined && args.labels !== null) {
+    const norm = normalizeStringArray(args.labels, "labels");
+    if (!norm.ok) {
+      return textResult(
+        { error: norm.error },
+        "jira_create_task 失败: labels 非法",
+      );
+    }
+    extraLabels.push(...norm.value);
+  }
   const labels = ["plan", ...extraLabels];
 
   const description = buildTaskDescription(
@@ -169,18 +188,24 @@ export async function createTask(
   }
 
   // --- optional block relationships (0.5.2+) ---
+  // CP-3751: block.blocks / block.blockedBy members accept string | number
+  // → normalized to string[].
   let blockErrors: string[] = [];
   let blockPlan: Array<{ direction: string; keys: string[] }> = [];
   const blockParam = args.block as Record<string, unknown> | undefined;
-  if (blockParam && typeof blockParam === "object") {
-    const blocks = blockParam.blocks;
-    const blockedBy = blockParam.blockedBy;
-    if (Array.isArray(blocks) && blocks.length > 0) {
-      blockPlan.push({ direction: "blocks", keys: blocks as string[] });
-    }
-    if (Array.isArray(blockedBy) && blockedBy.length > 0) {
-      blockPlan.push({ direction: "blockedBy", keys: blockedBy as string[] });
-    }
+  const normalizedBlock = normalizeBlockParam(blockParam);
+  if ("error" in normalizedBlock) {
+    return textResult(
+      { error: normalizedBlock.error },
+      "jira_create_task 失败: block 非法",
+    );
+  }
+  const blockKeys = normalizedBlock.value;
+  if (blockKeys.blocks.length > 0) {
+    blockPlan.push({ direction: "blocks", keys: blockKeys.blocks });
+  }
+  if (blockKeys.blockedBy.length > 0) {
+    blockPlan.push({ direction: "blockedBy", keys: blockKeys.blockedBy });
   }
 
   try {
@@ -192,30 +217,19 @@ export async function createTask(
     const newKey = data.key;
 
     // establish block relationships (mirror create_subtask.ts:155-182)
-    if (newKey && blockParam && typeof blockParam === "object") {
-      const blocks = blockParam.blocks;
-      const blockedBy = blockParam.blockedBy;
-
-      if (Array.isArray(blocks)) {
-        for (const target of blocks) {
-          if (typeof target === "string" && target.trim().length > 0) {
-            const r = await block({ blocker: newKey, blocked: target });
-            const d = r.details as Record<string, unknown> | undefined;
-            if (d && !d.ok) {
-              blockErrors.push(`blocks ${target}: ${d.error ?? JSON.stringify(d)}`);
-            }
-          }
+    if (newKey) {
+      for (const target of blockKeys.blocks) {
+        const r = await block({ blocker: newKey, blocked: target });
+        const d = r.details as Record<string, unknown> | undefined;
+        if (d && !d.ok) {
+          blockErrors.push(`blocks ${target}: ${d.error ?? JSON.stringify(d)}`);
         }
       }
-      if (Array.isArray(blockedBy)) {
-        for (const target of blockedBy) {
-          if (typeof target === "string" && target.trim().length > 0) {
-            const r = await block({ blocker: target, blocked: newKey });
-            const d = r.details as Record<string, unknown> | undefined;
-            if (d && !d.ok) {
-              blockErrors.push(`blockedBy ${target}: ${d.error ?? JSON.stringify(d)}`);
-            }
-          }
+      for (const target of blockKeys.blockedBy) {
+        const r = await block({ blocker: target, blocked: newKey });
+        const d = r.details as Record<string, unknown> | undefined;
+        if (d && !d.ok) {
+          blockErrors.push(`blockedBy ${target}: ${d.error ?? JSON.stringify(d)}`);
         }
       }
     }

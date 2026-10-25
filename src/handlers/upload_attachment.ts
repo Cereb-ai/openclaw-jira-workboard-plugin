@@ -35,6 +35,7 @@ import * as path from "node:path";
 import { loadConfig } from "../auth.js";
 import { atlassianApiBase } from "../auth.js";
 import { textResult } from "../dispatch.js";
+import { normalizeId } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 /** Atlassian Cloud per-attachment hard cap. */
@@ -94,19 +95,21 @@ export async function uploadAttachment(
     );
   }
 
-  const issueIdOrKey = args.issueIdOrKey;
-  if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
+  // CP-3751: issueIdOrKey accepts string | number → normalized to string.
+  const issueIdOrKeyNorm = normalizeId(args.issueIdOrKey, "issueIdOrKey");
+  if (!issueIdOrKeyNorm.ok) {
     return textResult(
       {
         ok: false,
         error: {
           status: 400,
-          message: "upload_attachment requires a non-empty `issueIdOrKey` (string).",
+          message: issueIdOrKeyNorm.error,
         },
       },
       "jira_upload_attachment 失败: 缺少 issueIdOrKey",
     );
   }
+  const issueIdOrKey = issueIdOrKeyNorm.value;
 
   const filePath = args.filePath;
   if (typeof filePath !== "string" || filePath.length === 0) {

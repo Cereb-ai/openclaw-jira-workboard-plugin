@@ -37,6 +37,7 @@
 import { loadConfig } from "../auth.js";
 import { jiraGet, JiraHttpError, buildUrl, authHeaders } from "../http.js";
 import { textResult } from "../dispatch.js";
+import { normalizeId } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 const DEFAULT_ATTACHMENT_DIR = "/tmp/openclaw-attachments";
@@ -81,13 +82,15 @@ export async function getAttachment(
     );
   }
 
-  const attachmentId = args.attachmentId;
-  if (typeof attachmentId !== "string" || attachmentId.length === 0) {
+  // CP-3751: attachmentId accepts string | number → normalized to string.
+  const attachmentIdNorm = normalizeId(args.attachmentId, "attachmentId");
+  if (!attachmentIdNorm.ok) {
     return textResult(
-      { error: "get_attachment requires a non-empty `attachmentId` (string)." },
+      { error: attachmentIdNorm.error },
       "jira_get_attachment 失败: 缺少 attachmentId",
     );
   }
+  const attachmentId = attachmentIdNorm.value;
 
   // Optional saveToPath — caller-controlled destination.
   const saveToPath = args.saveToPath;

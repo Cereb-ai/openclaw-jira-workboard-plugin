@@ -13,6 +13,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `jira_create_task`: labels array now always includes the `"plan"` label, regardless of whether the caller passed `args.labels` (was a regression risk when caller passed `labels=[]`).
 
+## [0.5.3] - 2026-10-25
+
+### Added
+- `src/normalize.ts` — shared parameter normalization helpers (`normalizeId` / `normalizeInt` / `normalizeStringArray` / `normalizeBlockParam`), used by every handler that touches an id-class, pagination-class or array-class parameter.
+- `src/normalize.test.ts` — unit tests for the normalization helpers (number / numeric string / padded string / clamp / illegal type coverage).
+- `src/handlers/param_normalization.test.ts` — cross-handler reproduction tests for the CP-3751 contract (id / pagination / array members / strict content fields).
+
+### Changed
+- **Parameter typing (CP-3751)** — id-class parameters (`issueIdOrKey` / `commentId` / `attachmentId` / `parent` / `project` / `blocker` / `blocked`), pagination-class parameters (`maxResults` / `startAt`) and array-class parameter members (`fields` / `mentionAccountIds` / `labels` / `block.blocks` / `block.blockedBy`) now accept **string | number** at the schema layer and are normalized in the handler before the REST call. Previously a numeric `commentId` was rejected with `must be string` and a numeric-string `maxResults` with `must be number` — three consecutive schema rejections trip the runtime's hard circuit breaker, which kills the agent session and re-dispatches the ticket.
+  - id → trimmed `string` (number → `String(number)`; leading/trailing whitespace stripped).
+  - pagination → `integer` (numeric strings accepted; whitespace tolerated).
+  - array members → `string[]` (numeric members normalized instead of being silently dropped — `fields: [10019]` previously produced an empty field list).
+- `jira_list_comments`: `maxResults` above the 100 limit is now **clamped to 100** instead of returning a hard `maxResults is capped at 100` error. The effective value is echoed back in `request.maxResults` and in the `details` one-liner.
+
+### Fixed
+- `jira_get` / `jira_search`: a numeric member in `fields` (e.g. `[10019]`) was silently dropped by the `.filter((f) => typeof f === "string")` guard, so the request went out with the wrong field set. Members are now normalized to strings.
+- `jira_create_task` / `jira_create_subtask`: numeric label members were silently dropped — `labels: [3740]` created the issue with only the auto `"plan"` label. Members are now normalized to strings.
+- `jira_comment`: numeric `mentionAccountIds` members were silently dropped, so the @mention never reached the ADF mention node. Members are now normalized to strings.
+
+### Unchanged (deliberately)
+- Content fields (`body` / `summary` / `question` / `requirements` / `scope` / `acceptance_criteria` / `reason` / `description` / `jql` / `orderBy` / `since` / `targetStatus` / `verdict` / `label` / `filePath`) stay **strict** — passing an object or array is still rejected with an actionable error, never silently `String()`-ed.
+- Tool return shapes and `details` wording are unchanged (the only addition is `request.maxResults` on the clamped `jira_list_comments` path).
+
 ## [0.5.2] - 2026-09-09
 
 ### Changed

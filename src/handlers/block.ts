@@ -25,6 +25,7 @@
 import { loadConfig } from "../auth.js";
 import { jiraPost, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
+import { normalizeId } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 export async function block(
@@ -37,18 +38,18 @@ export async function block(
     return textResult({ error: errorMessage(err) });
   }
 
-  const blocker = args.blocker;
-  if (typeof blocker !== "string" || blocker.trim().length === 0) {
-    return textResult({
-      error: "block requires a non-empty `blocker` (string, issue key) argument.",
-    });
+  // CP-3751: blocker / blocked accept string | number → normalized to string.
+  const blockerNorm = normalizeId(args.blocker, "blocker");
+  if (!blockerNorm.ok) {
+    return textResult({ error: blockerNorm.error });
   }
-  const blocked = args.blocked;
-  if (typeof blocked !== "string" || blocked.trim().length === 0) {
-    return textResult({
-      error: "block requires a non-empty `blocked` (string, issue key) argument.",
-    });
+  const blocker = blockerNorm.value;
+
+  const blockedNorm = normalizeId(args.blocked, "blocked");
+  if (!blockedNorm.ok) {
+    return textResult({ error: blockedNorm.error });
   }
+  const blocked = blockedNorm.value;
 
   if (blocker === blocked) {
     return textResult({

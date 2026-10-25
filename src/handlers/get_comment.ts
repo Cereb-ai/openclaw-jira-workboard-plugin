@@ -31,6 +31,7 @@ import { loadConfig } from "../auth.js";
 import { jiraGet, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
 import { adfToPlainText } from "./_adf.js";
+import { normalizeId } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 export async function getComment(
@@ -46,28 +47,30 @@ export async function getComment(
     );
   }
 
-  const issueIdOrKey = args.issueIdOrKey;
-  if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
+  // CP-3751: issueIdOrKey / commentId accept string | number and are
+  // normalized to a trimmed string before the REST call.
+  const issueIdOrKeyNorm = normalizeId(args.issueIdOrKey, "issueIdOrKey");
+  if (!issueIdOrKeyNorm.ok) {
     return textResult(
-      {
-        error:
-          "get_comment requires a non-empty `issueIdOrKey` (string) argument.",
-      },
+      { error: issueIdOrKeyNorm.error },
       "jira_get_comment 失败: 缺 issueIdOrKey",
     );
   }
-  const commentId = args.commentId;
-  if (typeof commentId !== "string" || commentId.trim().length === 0) {
+  const issueIdOrKey = issueIdOrKeyNorm.value;
+
+  const commentIdNorm = normalizeId(args.commentId, "commentId");
+  if (!commentIdNorm.ok) {
     return textResult(
       {
         error:
-          "get_comment requires a non-empty `commentId` (string) argument. " +
-          "Atlassian comment ids are numeric strings (e.g. '10001'). " +
+          commentIdNorm.error +
+          " Atlassian comment ids are numeric (e.g. '10001'). " +
           "Get them from jira_list_comments first.",
       },
       "jira_get_comment 失败: 缺 commentId",
     );
   }
+  const commentId = commentIdNorm.value;
 
   try {
     const data = (await jiraGet(

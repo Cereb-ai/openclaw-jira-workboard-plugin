@@ -28,6 +28,7 @@
 import { loadConfig } from "../auth.js";
 import { jiraPost, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
+import { normalizeId, normalizeStringArray } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 export async function comment(
@@ -43,13 +44,15 @@ export async function comment(
     );
   }
 
-  const issueIdOrKey = args.issueIdOrKey;
-  if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
+  // CP-3751: issueIdOrKey accepts string | number → normalized to string.
+  const issueIdOrKeyNorm = normalizeId(args.issueIdOrKey, "issueIdOrKey");
+  if (!issueIdOrKeyNorm.ok) {
     return textResult(
-      { error: "comment requires a non-empty `issueIdOrKey` (string)." },
+      { error: issueIdOrKeyNorm.error },
       "jira_comment 失败: 缺 issueIdOrKey",
     );
   }
+  const issueIdOrKey = issueIdOrKeyNorm.value;
 
   const body = args.body;
   if (typeof body !== "string") {
@@ -70,11 +73,20 @@ export async function comment(
     );
   }
 
-  // Optional mention list — must be an array of strings.
+  // Optional mention list — must be an array of strings or numbers.
+  // CP-3751: members are normalized to strings; an illegal member type
+  // is rejected instead of being silently dropped.
   const mentionAccountIds = readMentionAccountIds(args.mentionAccountIds);
+  if ("error" in mentionAccountIds) {
+    return textResult(
+      { error: mentionAccountIds.error },
+      "jira_comment 失败: mentionAccountIds 非法",
+    );
+  }
+  const mentionIds = mentionAccountIds.value;
 
   // Build the ADF body internally. \n → hardBreak, @mention prefix if any.
-  const adf = buildCommentAdf(body, mentionAccountIds);
+  const adf = buildCommentAdf(body, mentionIds);
 
   try {
     const data = (await jiraPost(cfg, `issue/${issueIdOrKey}/comment`, {
@@ -90,7 +102,7 @@ export async function comment(
         // key-class info (account IDs, not user content).
         request: {
           issueIdOrKey,
-          mentions: mentionAccountIds,
+          mentions: mentionIds,
           bodyChars: body.length,
         },
         comment: {
@@ -123,17 +135,16 @@ function commentDetailsSummary(issueIdOrKey: string, commentId: string | undefin
 }
 
 /**
- * Normalize the optional mentionAccountIds arg. Returns [] if missing or empty.
+ * Normalize the optional mentionAccountIds arg. Returns [] if missing or
+ * empty. CP-3751: members accept string | number → normalized to strings.
  */
-function readMentionAccountIds(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const out: string[] = [];
-  for (const item of raw) {
-    if (typeof item === "string" && item.length > 0) {
-      out.push(item);
-    }
-  }
-  return out;
+function readMentionAccountIds(
+  raw: unknown,
+): { ok: true; value: string[] } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) return { ok: true, value: [] };
+  const norm = normalizeStringArray(raw, "mentionAccountIds");
+  if (!norm.ok) return { ok: false, error: norm.error };
+  return { ok: true, value: norm.value };
 }
 
 /**
