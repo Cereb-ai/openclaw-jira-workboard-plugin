@@ -242,8 +242,8 @@ export default defineToolPlugin({
         block: Type.Optional(
           Type.Object(
             {
-              blockedBy: Type.Optional(StringOrNumberArray),
-              blocks: Type.Optional(StringOrNumberArray),
+              blockedBy: Type.Optional(StringOrNumberArray()),
+              blocks: Type.Optional(StringOrNumberArray()),
             },
             { description: "Optional dependency links" },
           ),
@@ -280,8 +280,8 @@ export default defineToolPlugin({
         block: Type.Optional(
           Type.Object(
             {
-              blockedBy: Type.Optional(StringOrNumberArray),
-              blocks: Type.Optional(StringOrNumberArray),
+              blockedBy: Type.Optional(StringOrNumberArray()),
+              blocks: Type.Optional(StringOrNumberArray()),
             },
             { description: "Optional dependency links" },
           ),
