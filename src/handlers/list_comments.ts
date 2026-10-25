@@ -49,9 +49,11 @@ import { loadConfig } from "../auth.js";
 import { jiraGet, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
 import { adfToPlainText } from "./_adf.js";
+import { normalizeId, normalizeInt } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 const DEFAULT_MAX_RESULTS = 10;
+const MAX_RESULTS_LIMIT = 100;
 const BODY_TRUNCATE_LIMIT = 500;
 const ALLOWED_ORDER_BY = new Set(["created", "-created"]);
 
@@ -68,34 +70,28 @@ export async function listComments(
     );
   }
 
-  const issueIdOrKey = args.issueIdOrKey;
-  if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
+  // CP-3751: issueIdOrKey accepts string | number → normalized to string.
+  const issueIdOrKeyNorm = normalizeId(args.issueIdOrKey, "issueIdOrKey");
+  if (!issueIdOrKeyNorm.ok) {
     return textResult(
-      {
-        error:
-          "list_comments requires a non-empty `issueIdOrKey` (string) argument.",
-      },
+      { error: issueIdOrKeyNorm.error },
       "jira_list_comments 失败: 缺少 issueIdOrKey",
     );
   }
+  const issueIdOrKey = issueIdOrKeyNorm.value;
 
-  // startAt: optional, default 0. Reject negative / non-integer.
+  // startAt: optional, default 0. Accepts number | numeric string.
+  // Reject negative / non-integer (CP-3751).
   let startAt = 0;
   if (args.startAt !== undefined && args.startAt !== null) {
-    if (
-      typeof args.startAt !== "number" ||
-      !Number.isInteger(args.startAt) ||
-      args.startAt < 0
-    ) {
+    const norm = normalizeInt(args.startAt, "startAt", { min: 0 });
+    if (!norm.ok) {
       return textResult(
-        {
-          error:
-            "list_comments `startAt` must be a non-negative integer (default 0).",
-        },
+        { error: norm.error },
         "jira_list_comments 失败: startAt 非法",
       );
     }
-    startAt = args.startAt;
+    startAt = norm.value;
   }
 
   // maxResults: optional, default 10 (CP-2669 G4 — was 20 in 0.5.x, dropped
@@ -103,31 +99,25 @@ export async function listComments(
   // recent 10 cover the LLM use-case; use `nextStartAt` to paginate).
   // Cap at 100 — beyond that Atlassian returns paginated anyway and the LLM
   // will burn context for no gain.
+  //
+  // CP-3751: accepts number | numeric string, and an over-limit value is
+  // CLAMPED to 100 (was: a hard "capped at 100" error). The effective
+  // value is echoed in the response so the agent can see what applied.
   let maxResults = DEFAULT_MAX_RESULTS;
+  let maxResultsClamped = false;
   if (args.maxResults !== undefined && args.maxResults !== null) {
-    if (
-      typeof args.maxResults !== "number" ||
-      !Number.isInteger(args.maxResults) ||
-      args.maxResults < 1
-    ) {
+    const norm = normalizeInt(args.maxResults, "maxResults", {
+      min: 1,
+      max: MAX_RESULTS_LIMIT,
+    });
+    if (!norm.ok) {
       return textResult(
-        {
-          error:
-            "list_comments `maxResults` must be a positive integer (default 10, max 100).",
-        },
+        { error: norm.error },
         "jira_list_comments 失败: maxResults 非法",
       );
     }
-    if (args.maxResults > 100) {
-      return textResult(
-        {
-          error:
-            "list_comments `maxResults` is capped at 100. Use `startAt` to paginate.",
-        },
-        "jira_list_comments 失败: maxResults 超 100",
-      );
-    }
-    maxResults = args.maxResults;
+    maxResults = norm.value;
+    maxResultsClamped = norm.clamped === true;
   }
 
   // orderBy: optional, default "-created". Reject unknown values to keep
@@ -253,6 +243,13 @@ export async function listComments(
       returned,
       comments,
     };
+    // CP-3751: when the caller's maxResults was CLAMPED (over the 100
+    // limit), surface the effective value so the agent can see what
+    // actually applied instead of guessing. Not echoed in the normal
+    // path — the slim envelope contract (CP-2669 G5) is unchanged.
+    if (maxResultsClamped) {
+      (payload.request as Record<string, unknown>).maxResults = maxResults;
+    }
     if (hasMore) {
       payload.nextStartAt = pageStart + pageSize;
     }
@@ -265,8 +262,13 @@ export async function listComments(
     const summaryLine = hasMore
       ? `${issueIdOrKey} 共 ${total} 条评论, 本次返回 ${returned} 条 (→${pageStart + pageSize} 翻页)`
       : `${issueIdOrKey} 共 ${total} 条评论, 本次返回 ${returned} 条`;
+    // CP-3751: make the clamped effective page size visible in the
+    // one-line summary too (details is what the agent reads first).
+    const summaryWithClamp = maxResultsClamped
+      ? `${summaryLine} [maxResults=${maxResults}]`
+      : summaryLine;
 
-    return textResult(payload, summaryLine);
+    return textResult(payload, summaryWithClamp);
   } catch (err) {
     if (err instanceof JiraHttpError) {
       return textResult(

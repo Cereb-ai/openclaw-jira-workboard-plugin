@@ -114,16 +114,44 @@ describe("abandon_task (CP-2710 batch 3)", () => {
     expect((result.details as string).length).toBeLessThan(100);
   });
 
-  it("AC-2710-AT-4: validation — bad labels shape; error + slim details", async () => {
+  it("AC-2710-AT-4: validation — bad labels shape (non-string/non-number member); error + slim details", async () => {
     const result = await abandonTask({
       issueIdOrKey: "CP-2690",
       reason: "x",
-      labels: ["ok", 42],
+      // CP-3751: numeric members are now ACCEPTED and normalized to
+      // strings — an object member is still rejected.
+      labels: ["ok", { bad: true }],
     });
     const parsed = JSON.parse(result.content[0].text as string);
     expect(parsed.error).toMatch(/labels/);
     expect(typeof result.details).toBe("string");
     expect((result.details as string).length).toBeLessThan(100);
+  });
+
+  it("AC-3751-AT-5: labels with a NUMBER member are normalized to strings (CP-3751)", async () => {
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      fields: { issuetype: { subtask: true, name: "Sub-task" } },
+    });
+    vi.mocked(jiraPost).mockResolvedValueOnce({ id: "c1", self: "http://x/c1" }); // comment
+    vi.mocked(jiraPut).mockResolvedValueOnce({}); // clear assignee
+    vi.mocked(jiraGet).mockResolvedValueOnce({
+      transitions: [{ id: "31", name: "Done", to: { name: "已完成" } }],
+    });
+    vi.mocked(jiraPost).mockResolvedValueOnce({}); // transition execute
+    vi.mocked(jiraPut).mockResolvedValueOnce({}); // remove label
+
+    const result = await abandonTask({
+      issueIdOrKey: "CP-2690",
+      reason: "x",
+      labels: [1234],
+    });
+    const parsed = JSON.parse(result.content[0].text as string);
+    expect(parsed.ok).toBe(true);
+    // The label-remove op must carry the normalized string label.
+    const putBody = vi.mocked(jiraPut).mock.calls[1][2] as {
+      update: { labels: { remove: string }[] };
+    };
+    expect(putBody.update.labels[0].remove).toBe("1234");
   });
 
   it("AC-2710-AT-5: non-subtask → fail-fast + slim details", async () => {

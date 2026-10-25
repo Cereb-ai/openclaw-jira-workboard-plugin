@@ -32,6 +32,7 @@
 import { loadConfig } from "../auth.js";
 import { jiraGet, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
+import { normalizeId } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 interface AttachmentMeta {
@@ -89,15 +90,15 @@ export async function listAttachments(
     );
   }
 
-  const issueIdOrKey = args.issueIdOrKey;
-  if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
+  // CP-3751: issueIdOrKey accepts string | number → normalized to string.
+  const issueIdOrKeyNorm = normalizeId(args.issueIdOrKey, "issueIdOrKey");
+  if (!issueIdOrKeyNorm.ok) {
     return textResult(
-      {
-        error: "list_attachments requires a non-empty `issueIdOrKey` (string).",
-      },
+      { error: issueIdOrKeyNorm.error },
       "jira_list_attachments 失败: 缺 issueIdOrKey",
     );
   }
+  const issueIdOrKey = issueIdOrKeyNorm.value;
 
   try {
     const data = (await jiraGet(cfg, `issue/${issueIdOrKey}`, {

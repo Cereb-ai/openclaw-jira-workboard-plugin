@@ -34,6 +34,7 @@ import {
   findTransition,
   type AtlassianTransition,
 } from "./_transitions.js";
+import { normalizeId } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 export async function transition(
@@ -49,13 +50,15 @@ export async function transition(
     );
   }
 
-  const issueIdOrKey = args.issueIdOrKey;
-  if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
+  // CP-3751: issueIdOrKey accepts string | number → normalized to string.
+  const issueIdOrKeyNorm = normalizeId(args.issueIdOrKey, "issueIdOrKey");
+  if (!issueIdOrKeyNorm.ok) {
     return textResult(
-      { error: "transition requires a non-empty `issueIdOrKey` (string)." },
+      { error: issueIdOrKeyNorm.error },
       "jira_transition 失败: 缺少 issueIdOrKey",
     );
   }
+  const issueIdOrKey = issueIdOrKeyNorm.value;
   const targetStatus = args.targetStatus;
   if (typeof targetStatus !== "string" || targetStatus.trim().length === 0) {
     return textResult(

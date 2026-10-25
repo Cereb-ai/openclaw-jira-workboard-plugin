@@ -32,6 +32,7 @@ import { loadConfig } from "../auth.js";
 import { jiraGet, jiraPost, jiraPut, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
 import { validateAdfContentNodes } from "./_adf.js";
+import { normalizeId, normalizeStringArray } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 const TARGET_STATUS = "已完成";
@@ -56,13 +57,15 @@ export async function abandonTask(
     );
   }
 
-  const issueIdOrKey = args.issueIdOrKey;
-  if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
+  // CP-3751: issueIdOrKey accepts string | number → normalized to string.
+  const issueIdOrKeyNorm = normalizeId(args.issueIdOrKey, "issueIdOrKey");
+  if (!issueIdOrKeyNorm.ok) {
     return textResult(
-      { error: "abandon_task requires a non-empty `issueIdOrKey` (string)." },
+      { error: issueIdOrKeyNorm.error },
       "jira_abandon_task 失败: 缺少 issueIdOrKey",
     );
   }
+  const issueIdOrKey = issueIdOrKeyNorm.value;
   const reason = args.reason;
   if (typeof reason !== "string" || reason.trim().length === 0) {
     return textResult(
@@ -70,21 +73,22 @@ export async function abandonTask(
       "jira_abandon_task 失败: 缺少 reason",
     );
   }
+  // CP-3751: `labels` members accept string | number → normalized to string[].
   const labelsArg = args.labels;
   let labelsToRemove: string[] = DEFAULT_LABELS_TO_REMOVE;
-  if (labelsArg !== undefined) {
-    if (
-      !Array.isArray(labelsArg) ||
-      !labelsArg.every(
-        (label) => typeof label === "string" && label.trim().length > 0,
-      )
-    ) {
+  if (labelsArg !== undefined && labelsArg !== null) {
+    const norm = normalizeStringArray(labelsArg, "labels");
+    if (!norm.ok) {
       return textResult(
-        { error: "abandon_task `labels` must be an array of non-empty strings when provided." },
+        {
+          error:
+            "abandon_task `labels` must be an array of non-empty strings " +
+            "(numbers are accepted and normalized to strings) when provided.",
+        },
         "jira_abandon_task 失败: labels 形态错",
       );
     }
-    labelsToRemove = labelsArg as string[];
+    labelsToRemove = norm.value;
   }
 
   // Step 1: verify the issue is actually a subtask.

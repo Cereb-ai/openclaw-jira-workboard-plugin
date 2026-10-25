@@ -1,7 +1,7 @@
 # @cereb/jira-openclaw-plugin
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.5.1-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.5.3-blue.svg)](package.json)
 [![OpenClaw](https://img.shields.io/badge/OpenClaw-%3E%3D2026.5.17-purple.svg)](https://docs.openclaw.ai)
 
 OpenClaw native plugin for Jira Cloud REST API v3 — exposes 14 named tools (one per Jira REST method), each invocable directly from an OpenClaw agent or the bundled `jira-tool` CLI. Replaces the legacy single-dispatcher `atlassian.*` tool.
@@ -118,6 +118,36 @@ jira-tool submit_verdict '{"issueIdOrKey":"<issue-key>","verdict":"PASS","summar
 ```
 
 Exit codes: `0` = success, `5` = business error, `2` = JSON parse error, `1` = missing args.
+
+## Parameter typing (CP-3751)
+
+Agents often guess a parameter's JSON type wrong (a numeric comment id
+arrives as `10001` instead of `"10001"`, a page size arrives as `"10"`).
+The tool schemas previously rejected those guesses outright, which burned
+the runtime's circuit-breaker budget on a pure type mistake.
+
+Three parameter classes now accept **string | number** and are normalized
+before the Atlassian REST call:
+
+| class | parameters | normalized to |
+|---|---|---|
+| id | `issueIdOrKey`, `commentId`, `attachmentId`, `parent`, `project`, `mentionAccountIds` members | trimmed `string` |
+| pagination | `maxResults`, `startAt` | `integer` (numeric strings accepted) |
+| array members | `fields`, `mentionAccountIds`, `labels`, `block.blocks`, `block.blockedBy` | `string[]` |
+
+```json
+jira_get_comment { issueIdOrKey: "WTO-71", commentId: 10001 }   // number OK
+jira_list_comments { issueIdOrKey: "WTO-71", maxResults: "10" } // numeric string OK
+jira_get { issueIdOrKey: "WTO-71", fields: [10019] }             // numeric member OK
+```
+
+`maxResults` above the 100 limit is **clamped** to 100 (not rejected); the
+effective value is echoed back in `request.maxResults` and in `details`.
+
+Content fields (`body`, `summary`, `question`, `requirements`, `scope`,
+`acceptance_criteria`, `reason`, `description`, …) stay **strict** — an
+object or array is rejected with an actionable error, never silently
+`String()`-ed.
 
 ## Development
 

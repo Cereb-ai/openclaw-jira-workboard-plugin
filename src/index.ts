@@ -28,6 +28,55 @@ import { getAttachment } from "./handlers/get_attachment.js";
 import { uploadAttachment } from "./handlers/upload_attachment.js";
 
 /**
+ * CP-3751 — parameter type aliases.
+ *
+ * The old schemas were strict (`Type.String()` / `Type.Number()` /
+ * `Type.Array(Type.String())`), so an agent that guessed a numeric id as
+ * a number, a page size as a numeric string, or a field id as a number
+ * member got rejected by the TypeBox validator BEFORE the handler ran.
+ * Three consecutive schema rejections trip the runtime's hard circuit
+ * breaker → the session dies and the ticket is re-dispatched.
+ *
+ * These aliases widen the *declared* type for the three parameter
+ * classes that are genuinely ambiguous (id / pagination / array member)
+ * to `string | number`. The handlers then normalize the value to the
+ * single type the Atlassian REST API actually wants (see
+ * `src/normalize.ts`).
+ *
+ * Content fields (body / summary / question / requirements / scope /
+ * acceptance_criteria / reason / description / jql / orderBy / since /
+ * authorAccountId / targetStatus / verdict / label / filePath / …) are
+ * deliberately NOT widened — they stay strict so an object or array is
+ * rejected instead of being silently `String()`-ed.
+ */
+
+/** ID-class parameter: issue key / comment id / attachment id. */
+const IdParam = (opts: { description?: string } = {}) =>
+  Type.Union([Type.String(), Type.Number()], {
+    description:
+      opts.description ??
+      "Identifier — string or number (both accepted; normalized to a string).",
+  });
+
+/** Pagination-class parameter: page size / offset. */
+const IntParam = (opts: { description?: string } = {}) =>
+  Type.Union([Type.Number(), Type.String()], {
+    description:
+      opts.description ??
+      "Integer — number or numeric string (both accepted; normalized to an integer).",
+  });
+
+/** Array-class parameter: every member is a string or a number. */
+const StringOrNumberArray = (opts: { description?: string } = {}) =>
+  Type.Array(
+    Type.Union([Type.String(), Type.Number()], {
+      description:
+        "Member — string or number (both accepted; normalized to a string).",
+    }),
+    opts.description ? { description: opts.description } : undefined,
+  );
+
+/**
  * Bridge plugin config (from openclaw.json) into the module-level state
  * that handlers read via loadConfig(). Each tool calls this at the start
  * of execute() so config overrides are picked up at the latest possible
@@ -62,10 +111,10 @@ export default defineToolPlugin({
       parameters: Type.Object({
         jql: Type.String({ description: "JQL query string" }),
         maxResults: Type.Optional(
-          Type.Number({ description: "Max results, default 30" }),
+          IntParam({ description: "Max results, default 30" }),
         ),
         fields: Type.Optional(
-          Type.Array(Type.String(), { description: "Fields to include" }),
+          StringOrNumberArray({ description: "Fields to include" }),
         ),
       }),
       async execute(params, config) {
@@ -79,9 +128,9 @@ export default defineToolPlugin({
       description:
         "Read single ticket details by key (e.g. 'WTO-100'). Default fetches only a whitelisted set of 13 fields (summary/status/issuetype/priority/labels/assignee/reporter/created/updated/parent/description/issuelinks/attachment) — this excludes the heavy `comment` and `worklog` sub-resources (5-50 KB per call). Pass `fields: ['*all']` for the full payload, or a specific list like `['customfield_10019']` to scope to one field. Comments should be fetched separately via jira_list_comments. Attachments: default returns the 5 most-recent; if more exist the response includes `moreCount: N` (and `attachmentCount` is the total) — call jira_list_attachments for the full list. CP-2669: `issue.description` is plain text (not ADF); raw ADF stays accessible under `issue.fields.description`. `details` on the result is a <100-char one-line summary.",
       parameters: Type.Object({
-        issueIdOrKey: Type.String({ description: "Issue key like 'WTO-100'" }),
+        issueIdOrKey: IdParam({ description: "Issue key like 'WTO-100'" }),
         fields: Type.Optional(
-          Type.Array(Type.String(), {
+          StringOrNumberArray({
             description:
               "Field names to fetch server-side. Empty / omitted = default whitelist (efficient). Pass ['*all'] for full payload, or e.g. ['customfield_10019'] to scope to one field.",
           }),
@@ -98,13 +147,13 @@ export default defineToolPlugin({
       description:
         "List comments on a ticket. Comment bodies are rendered to plain text (no ADF); bodies longer than 500 chars are truncated with a tail marker pointing at jira_get_comment. Default maxResults=10, max 100. Returns {ok, method, request{issueIdOrKey}, total, returned, comments, [nextStartAt]}. nextStartAt is present only when more comments remain — pass it as the next startAt to paginate. Optional startAt / maxResults / orderBy ('created' | '-created', default '-created') / since (ISO date, client-side filter on created>=since) / authorAccountId (client-side filter on author.accountId).",
       parameters: Type.Object({
-        issueIdOrKey: Type.String({ description: "Issue key" }),
+        issueIdOrKey: IdParam({ description: "Issue key" }),
         startAt: Type.Optional(
-          Type.Number({ description: "Pagination offset, default 0" }),
+          IntParam({ description: "Pagination offset, default 0" }),
         ),
         maxResults: Type.Optional(
-          Type.Number({
-            description: "Max comments to return, default 10, max 100",
+          IntParam({
+            description: "Max comments to return, default 10, max 100 (over 100 is clamped to 100)",
           }),
         ),
         orderBy: Type.Optional(
@@ -136,9 +185,9 @@ export default defineToolPlugin({
       description:
         "Read a single comment by id. Both issueIdOrKey AND commentId are required. Body is rendered to plain text (NEVER truncated — this is the full-text escape hatch for jira_list_comments' 500-char cap; no ADF). Returns {ok, method, request{issueIdOrKey, commentId}, comment{id, author{displayName, accountId}, created, updated, body, mentions}}. author.accountId is preserved for downstream mention routing. details = <100-char one-line summary.",
       parameters: Type.Object({
-        issueIdOrKey: Type.String({ description: "Issue key" }),
-        commentId: Type.String({
-          description: "Comment id (numeric string from jira_list_comments)",
+        issueIdOrKey: IdParam({ description: "Issue key" }),
+        commentId: IdParam({
+          description: "Comment id (numeric string from jira_list_comments; a plain number is also accepted)",
         }),
       }),
       async execute(params, config) {
@@ -152,10 +201,10 @@ export default defineToolPlugin({
       description:
         "Add a plain-text comment (auto ADF wrap). Returns {ok, method, request{issueIdOrKey, mentions, bodyChars}, comment{id, self, created}}. The comment body is NOT echoed (bodyChars only). details = one-line summary.",
       parameters: Type.Object({
-        issueIdOrKey: Type.String({ description: "Issue key" }),
+        issueIdOrKey: IdParam({ description: "Issue key" }),
         body: Type.String({ description: "Comment body (plain text). Use \\n for line breaks. Plugin auto-wraps to ADF." }),
         mentionAccountIds: Type.Optional(
-          Type.Array(Type.String(), {
+          StringOrNumberArray({
             description: "Optional list of Atlassian accountIds to @mention in this comment.",
           }),
         ),
@@ -186,15 +235,15 @@ export default defineToolPlugin({
             "Plain text string (NOT string[]). 验收标准 段正文, e.g. 'AC1: ...\\nAC2: ...\\nAC3: ...'.",
         }),
         labels: Type.Optional(
-          Type.Array(Type.String(), {
+          StringOrNumberArray({
             description: "Additional labels (plan label is auto-added)",
           }),
         ),
         block: Type.Optional(
           Type.Object(
             {
-              blockedBy: Type.Optional(Type.Array(Type.String())),
-              blocks: Type.Optional(Type.Array(Type.String())),
+              blockedBy: Type.Optional(StringOrNumberArray),
+              blocks: Type.Optional(StringOrNumberArray),
             },
             { description: "Optional dependency links" },
           ),
@@ -225,14 +274,14 @@ export default defineToolPlugin({
           description:
             "Plain text string (NOT string[]). 验收标准 段正文.",
         }),
-        labels: Type.Array(Type.String(), {
+        labels: StringOrNumberArray({
           description: "Required. e.g. ['code'], ['test'], ['ops']",
         }),
         block: Type.Optional(
           Type.Object(
             {
-              blockedBy: Type.Optional(Type.Array(Type.String())),
-              blocks: Type.Optional(Type.Array(Type.String())),
+              blockedBy: Type.Optional(StringOrNumberArray),
+              blocks: Type.Optional(StringOrNumberArray),
             },
             { description: "Optional dependency links" },
           ),
@@ -249,7 +298,7 @@ export default defineToolPlugin({
       description:
         "⚠️ ATOMIC — 一次调用即关闭 ticket，不需要再额外调用 jira_transition。verdict=PASS: 自动发评论 + 转「已完成」; verdict=FAIL: 自动发评论 + 加 escalated label + 清 assignee。reason 必填 (FAIL 时). 调完别再 transition 会覆盖已转好的状态。返回 success={ok, method, verdict, comment{id,self}, transition{id,name,to,toCategory,matchedBy}} (PASS) / {label, assigneeCleared} (FAIL); partial={ok:false, partial:true, verdict, comment, hint?}; 顶层 verdict 字段统一 (PASS 分支补齐); summary 块去除。details <100 字符一句话摘要.",
       parameters: Type.Object({
-        issueIdOrKey: Type.String({ description: "Issue key" }),
+        issueIdOrKey: IdParam({ description: "Issue key" }),
         verdict: Type.Union(
           [Type.Literal("PASS"), Type.Literal("FAIL")],
           { description: "Verdict" },
@@ -275,10 +324,10 @@ export default defineToolPlugin({
       description:
         "Abandon a subtask (re-planning). 评论 + 清 assignee + 转「已完成」+ 清 escalated label by default. Subtask-only (main task → submit_verdict). 返回 success={ok, method, comment{id,self}, assigneeCleared, labelsRemoved, labelsRemoveError, transition{id,name,to}}; partial 结构 0 改动仅 details 摘要; summary 块去除. details <100 字符一句话摘要.",
       parameters: Type.Object({
-        issueIdOrKey: Type.String({ description: "Subtask issue key" }),
+        issueIdOrKey: IdParam({ description: "Subtask issue key" }),
         reason: Type.String({ description: "Why abandoning" }),
         labels: Type.Optional(
-          Type.Array(Type.String(), {
+          StringOrNumberArray({
             description:
               "Labels to remove after transition succeeds. Defaults to ['escalated'].",
           }),
@@ -295,7 +344,7 @@ export default defineToolPlugin({
       description:
         "Main task asks a human for guidance. 评论 + wait-approval label (orchestrator 仍为 owner, 不清 assignee). Main-task-only (subtask → submit_verdict FAIL). 返回 success={ok, method, comment{id,self}, label:\"wait-approval\", mentioned: accountId|null}; partial 结构 0 改动仅 details 摘要; summary 块去除. details <100 字符一句话摘要.",
       parameters: Type.Object({
-        issueIdOrKey: Type.String({ description: "Main task issue key" }),
+        issueIdOrKey: IdParam({ description: "Main task issue key" }),
         question: Type.String({ description: "Question to ask the human" }),
       }),
       async execute(params, config) {
@@ -309,7 +358,7 @@ export default defineToolPlugin({
       description:
         "⚠️ 调试/人为干预专用 — 正常 ticket 生命周期请用 jira_submit_verdict（PASS/FAIL 自动 close）。普通 agent 不应主动调本方法（会绕过 verdict 流程 + 丢失审计），仅 cereb-pilot dispatcher 或 Leo 手动修复 stuck state 时使用。Logical names: 'todo' / 'in_progress' / 'done' / 'review' / 'blocked' / 'reopen' / 'cancelled' (project-agnostic). Falls back to exact project status name. 返回 success={ok, method, request{issueIdOrKey}, transition{id,name,to,category,matchedBy}}; matchedBy 合并进 transition 块; summary 块 + request.targetStatus/resolvedBy 回声去除. 无匹配 error+hint「Available transitions」完整保留. details <100 字符一句话摘要.",
       parameters: Type.Object({
-        issueIdOrKey: Type.String({ description: "Issue key" }),
+        issueIdOrKey: IdParam({ description: "Issue key" }),
         targetStatus: Type.String({
           description:
             "Logical name (preferred): 'todo' / 'in_progress' / 'done' / 'review' / 'blocked' / 'reopen' / 'cancelled'. Or pass the project's exact status name as last-resort fallback.",
@@ -326,7 +375,7 @@ export default defineToolPlugin({
       description:
         "List ALL attachment metadata on a ticket (no cap — this is the full-enumeration escape hatch for jira_get's 5-attachment cap). Use when jira_get's `moreCount: N` indicates there are unlisted attachments, or when you need a complete list. Returns {ok, method, request{issueIdOrKey}, count, attachments[]}; each attachment is {id, self, filename, size, mimeType, created, content, thumbnail, author{displayName, accountId}} (compact form, avatarUrls stripped). NO file content — use jira_get_attachment for the actual bytes. details = <100-char one-line summary.",
       parameters: Type.Object({
-        issueIdOrKey: Type.String({ description: "Issue key like 'SSSS-432'" }),
+        issueIdOrKey: IdParam({ description: "Issue key like 'SSSS-432'" }),
       }),
       async execute(params, config) {
         applyConfig(config);
@@ -339,7 +388,7 @@ export default defineToolPlugin({
       description:
         "Download an attachment's binary to disk (path handoff, not base64). Returns {ok, method, request{attachmentId}, path, size, mimeType, filename}. path is the actual saved location (default /tmp/openclaw-attachments/{id}.{ext}, or saveToPath). details = one-line summary.",
       parameters: Type.Object({
-        attachmentId: Type.String({
+        attachmentId: IdParam({
           description:
             "Attachment id (string from jira_list_attachments or jira_get.attachments[].id).",
         }),
@@ -361,7 +410,7 @@ export default defineToolPlugin({
       description:
         "Upload a single local file to an issue (max 100 MB). Returns {ok, method, request{issueIdOrKey}, count, attachments[{id, filename, size, mimeType, content}]}. filePath is NOT echoed. On failure: {ok:false, error:{status, message}} with synthetic status (404 missing file / 413 oversize / 500 misc). details = one-line summary.",
       parameters: Type.Object({
-        issueIdOrKey: Type.String({ description: "Issue key like 'SSSS-454'" }),
+        issueIdOrKey: IdParam({ description: "Issue key like 'SSSS-454'" }),
         filePath: Type.String({
           description:
             "Absolute path to the file to upload (server-side). Plugin reads from disk and uploads the bytes; the filename on Jira is basename(filePath).",

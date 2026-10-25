@@ -69,8 +69,8 @@ jira-tool --help
 |---|---|---|---|
 | `jira_search` | JQL 搜索 (默认 30 条) | `jql` | `maxResults`, `fields` |
 | `jira_get` | 读单 ticket 详情 (默认走白名单, 含 attachment 最新 5 个) | `issueIdOrKey` | `fields` |
-| `jira_list_comments` | 拉 ticket 全部评论 (ADF → 纯文本 + mentions) | `issueIdOrKey` | `startAt`, `maxResults` (≤100), `orderBy`, `since` (ISO date, 客户端 filter), `authorAccountId` (客户端 filter) |
-| `jira_get_comment` | 读单条评论 (ADF → 纯文本 + mentions) | `issueIdOrKey`, `commentId` | — |
+| `jira_list_comments` | 拉 ticket 全部评论 (ADF → 纯文本 + mentions) | `issueIdOrKey` | `startAt`, `maxResults` (≤100, 超限自动 clamp), `orderBy`, `since` (ISO date, 客户端 filter), `authorAccountId` (客户端 filter) |
+| `jira_get_comment` | 读单条评论 (ADF → 纯文本 + mentions) | `issueIdOrKey`, `commentId` (string 或 number) | — |
 | `jira_comment` | 给 ticket 加评论 (**纯文本 string**) | `issueIdOrKey`, `body` (string) | `mentionAccountIds` (string[] of accountIds) |
 | `jira_list_attachments` | 列 ticket 所有附件 metadata (无 cap) | `issueIdOrKey` | — |
 | `jira_get_attachment` | 下载附件二进制到本地 (默认 `/tmp/openclaw-attachments/{id}.{ext}`) | `attachmentId` | `saveToPath` (绝对路径) |
@@ -1129,6 +1129,8 @@ assert not problems, problems  # OK 才发
 7. **`transition` / `submit_verdict` 现在项目无关**：两者都接受逻辑名 `done` / `in_progress` / `review` / `blocked` / `reopen` / `todo` / `cancelled`，plugin 内部用 Jira 的 `statusCategory` (平台级标准) 匹配。**不再需要知道项目特有的状态名**。不确定可用状态时调 `jira_get` 看当前 status，或看 transition 返错时的 `Available transitions` 列表。
 8. **`jira_get` 默认走白名单, 不拉 `comment` / `worklog`** (~80% context 节省 vs `*navigable`). 需要全量 → `fields: ['*all']`; 需要单个 custom field → `fields: ['customfield_10019']`. 评论另走 `jira_list_comments` (ADF → 纯文本, deduped mentions). 3 个上下文优化工具详见上面"上下文优化" section.
 9. **`jira_list_comments` / `jira_get_comment` 输出永远是纯文本, 不是 ADF**: plugin 自动 ADF → plain text. 所以**不要**把 `jira_list_comments` 的输出直接喂回 `jira_comment` 的 `body` (会被 Atlassian 当成 string body 拒掉). 要 reply 哪条评论, 手动写 ADF.
+10. **(CP-3751) ID / 分页 / 数组成员接受 string 或 number**: `issueIdOrKey` / `commentId` / `attachmentId` / `parent` / `project` 传数字或数字字符串都行 (归一化为 string); `maxResults` / `startAt` 传数字或数字字符串都行 (归一化为 integer); `fields` / `mentionAccountIds` / `labels` / `block.blocks` / `block.blockedBy` 的**成员**传数字也行 (归一化为 string[]). 以前传错类型会被 schema 直接拒 (`must be string` / `must be number`), 连错 3 次会触发 runtime 硬熔断 → 会话终止 + 票重派. **内容字段 (`body` / `summary` / `question` / `requirements` / `scope` / `acceptance_criteria` / `reason`) 保持严格**: 传对象 / 数组会被拒, 不会静默 `String()` 化.
+11. **(CP-3751) `jira_list_comments` 的 `maxResults` 超 100 是 clamp 不是报错**: 传 `500` → 实际按 `100` 执行, `ok=true`, 生效值在 `request.maxResults` 和 `details` 里可见. 以前是直接返回 `capped at 100` 错误.
 
 ---
 

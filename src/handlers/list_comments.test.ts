@@ -183,14 +183,19 @@ describe("list_comments (SSSS-401)", () => {
     expect(jiraGet).not.toHaveBeenCalled();
   });
 
-  it("AC-401-LC-6: rejects maxResults > 100 (forces pagination)", async () => {
+  it("AC-401-LC-6: maxResults > 100 is CLAMPED to 100 (CP-3751 — was a hard 'capped at 100' error)", async () => {
+    vi.mocked(jiraGet).mockResolvedValueOnce({ total: 0, comments: [] });
     const result = await listComments({
       issueIdOrKey: "TEST-1",
       maxResults: 500,
     });
     const parsed = JSON.parse(result.content[0].text as string);
-    expect(parsed.error).toMatch(/capped at 100/);
-    expect(jiraGet).not.toHaveBeenCalled();
+    // CP-3751: over-limit is clamped, NOT rejected — ok=true, no error.
+    expect(parsed.ok).toBe(true);
+    expect(parsed.error).toBeUndefined();
+    expect(vi.mocked(jiraGet).mock.calls[0][2]).toMatchObject({ maxResults: 100 });
+    // The effective (clamped) value is visible to the caller.
+    expect(parsed.request.maxResults).toBe(100);
   });
 
   it("AC-401-LC-7: rejects unknown orderBy (URL injection guard)", async () => {

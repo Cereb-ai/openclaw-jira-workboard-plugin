@@ -27,6 +27,8 @@
  *   jira-tool jira_get '{"issueIdOrKey":"WTO-71"}'
  *   jira-tool jira_list_comments '{"issueIdOrKey":"WTO-71","maxResults":10}'
  *   jira-tool jira_get_comment '{"issueIdOrKey":"WTO-71","commentId":"10001"}'
+ *   jira-tool jira_get_comment '{"issueIdOrKey":"WTO-71","commentId":10001}'   // number also OK (CP-3751)
+ *   jira-tool jira_list_comments '{"issueIdOrKey":"WTO-71","maxResults":"10"}'  // numeric string also OK (CP-3751)
  *   jira-tool jira_comment '{"issueIdOrKey":"WTO-100","body":"plain text"}'
  *   jira-tool jira_list_attachments '{"issueIdOrKey":"WTO-100"}'
  *   jira-tool jira_get_attachment '{"attachmentId":"10001"}'
@@ -40,6 +42,15 @@
  *   jira-tool jira_transition '{"issueIdOrKey":"WTO-100","targetStatus":"Done"}'
  *
  * Output: JSON to stdout on success; non-zero exit + JSON error on stderr on failure.
+ *
+ * CP-3751 — parameter typing: id-class params (issueIdOrKey / commentId /
+ * attachmentId / parent / project) accept a string OR a number; pagination
+ * params (maxResults / startAt) accept a number OR a numeric string; array
+ * params (fields / mentionAccountIds / labels / block.*) accept members that
+ * are strings OR numbers. Everything is normalized before the REST call, so
+ * e.g. `{"commentId":10001}` and `{"commentId":"10001"}` behave identically.
+ * Content params (body / summary / question / requirements / …) stay
+ * strict — an object or array is rejected, never silently stringified.
  */
 import { search } from "./handlers/search.js";
 import { get } from "./handlers/get.js";

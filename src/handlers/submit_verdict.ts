@@ -61,6 +61,7 @@ import {
   findTransition,
   type AtlassianTransition,
 } from "./_transitions.js";
+import { normalizeId } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 type Verdict = "PASS" | "FAIL";
@@ -146,13 +147,15 @@ export async function submitVerdict(
     );
   }
 
-  const issueIdOrKey = args.issueIdOrKey;
-  if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
+  // CP-3751: issueIdOrKey accepts string | number → normalized to string.
+  const issueIdOrKeyNorm = normalizeId(args.issueIdOrKey, "issueIdOrKey");
+  if (!issueIdOrKeyNorm.ok) {
     return textResult(
-      { error: "submit_verdict requires a non-empty `issueIdOrKey` (string)." },
+      { error: issueIdOrKeyNorm.error },
       "jira_submit_verdict 失败: 缺少 issueIdOrKey",
     );
   }
+  const issueIdOrKey = issueIdOrKeyNorm.value;
   const verdict = args.verdict;
   if (verdict !== "PASS" && verdict !== "FAIL") {
     return textResult(

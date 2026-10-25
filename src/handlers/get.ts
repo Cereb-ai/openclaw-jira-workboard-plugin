@@ -56,6 +56,7 @@ import { loadConfig } from "../auth.js";
 import { jiraGet, JiraHttpError } from "../http.js";
 import { textResult } from "../dispatch.js";
 import { adfToPlainText } from "./_adf.js";
+import { normalizeId, normalizeStringArray } from "../normalize.js";
 import type { ToolResult } from "../types.js";
 
 /** Whitelisted Jira field names that jira_get fetches by default.
@@ -216,23 +217,30 @@ export async function get(args: Record<string, unknown>): Promise<ToolResult> {
     );
   }
 
-  const issueIdOrKey = args.issueIdOrKey;
-  if (typeof issueIdOrKey !== "string" || issueIdOrKey.length === 0) {
+  // CP-3751: issueIdOrKey accepts string | number → normalized to string.
+  const issueIdOrKeyNorm = normalizeId(args.issueIdOrKey, "issueIdOrKey");
+  if (!issueIdOrKeyNorm.ok) {
     return textResult(
-      {
-        error: "get requires a non-empty `issueIdOrKey` (string) argument.",
-      },
+      { error: issueIdOrKeyNorm.error },
       "jira_get 失败: 缺少 issueIdOrKey",
     );
   }
+  const issueIdOrKey = issueIdOrKeyNorm.value;
 
+  // CP-3751: `fields` members accept string | number → normalized to
+  // string[]. Previously numeric members were silently DROPPED, so
+  // `fields: [10019]` produced a request with an empty field list.
   const query: Record<string, string> = {};
-  if (Array.isArray(args.fields)) {
-    const fields = (args.fields as unknown[]).filter(
-      (f): f is string => typeof f === "string",
-    );
-    if (fields.length > 0) {
-      query.fields = fields.join(",");
+  if (args.fields !== undefined && args.fields !== null) {
+    const norm = normalizeStringArray(args.fields, "fields");
+    if (!norm.ok) {
+      return textResult(
+        { error: norm.error },
+        "jira_get 失败: fields 非法",
+      );
+    }
+    if (norm.value.length > 0) {
+      query.fields = norm.value.join(",");
     } else {
       // Empty array = caller wants the default efficient set.
       query.fields = DEFAULT_FIELDS.join(",");
