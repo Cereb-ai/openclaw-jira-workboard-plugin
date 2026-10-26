@@ -48,32 +48,77 @@ import { uploadAttachment } from "./handlers/upload_attachment.js";
  * authorAccountId / targetStatus / verdict / label / filePath / …) are
  * deliberately NOT widened — they stay strict so an object or array is
  * rejected instead of being silently `String()`-ed.
+ *
+ * CP-3767 — why the aliases are NOT a TypeBox union anymore.
+ *
+ * A TypeBox union of string + number serializes to a JSON Schema union
+ * keyword, and the DeepSeek provider's tool-compat hook treats the union
+ * keywords as unsupported: it flattens the union down to its FIRST
+ * variant (`selected = nonNullVariants[0]`), so the model-visible schema
+ * AND the tool-call validation both degenerate to a single type
+ * (`commentId` → string only, `maxResults` → number only). That is
+ * exactly what broke CP-3740's acceptance.
+ *
+ * The three aliases therefore emit a JSON Schema **type array**
+ * (`{ "type": ["string", "number"] }`) instead — no union keyword is
+ * produced, the DeepSeek hook leaves the schema untouched, and the
+ * TypeBox validator still accepts either type (and still rejects
+ * objects / arrays / booleans).
+ *
+ * See src/normalize.ts for the long-form rationale.
  */
+
+/** JSON Schema type array for "string or number" — no union keyword. */
+const STRING_OR_NUMBER_TYPE = ["string", "number"] as const;
+
+/** JSON Schema type array for "number or string" — pagination flavour. */
+const NUMBER_OR_STRING_TYPE = ["number", "string"] as const;
+
+/**
+ * Append the "string or number" type hint to a description unless the
+ * description already states it. The hint is what tells the MODEL that
+ * both types are accepted (the type array says it to the validator) —
+ * keeping both in sync is why the hint lives in the alias factory
+ * instead of being copy-pasted into every call site.
+ */
+function withTypeHint(description: string, hint: string): string {
+  if (description.toLowerCase().includes("string or number")) return description;
+  return `${description.replace(/\s*$/, "")} ${hint}`;
+}
 
 /** ID-class parameter: issue key / comment id / attachment id. */
 const IdParam = (opts: { description?: string } = {}) =>
-  Type.Union([Type.String(), Type.Number()], {
-    description:
+  Type.Unsafe<string | number>({
+    type: [...STRING_OR_NUMBER_TYPE],
+    description: withTypeHint(
       opts.description ??
-      "Identifier — string or number (both accepted; normalized to a string).",
+        "Identifier — string or number (both accepted; normalized to a string).",
+      "(string or number; normalized to a string).",
+    ),
   });
 
 /** Pagination-class parameter: page size / offset. */
 const IntParam = (opts: { description?: string } = {}) =>
-  Type.Union([Type.Number(), Type.String()], {
-    description:
+  Type.Unsafe<number | string>({
+    type: [...NUMBER_OR_STRING_TYPE],
+    description: withTypeHint(
       opts.description ??
-      "Integer — number or numeric string (both accepted; normalized to an integer).",
+        "Integer — number or numeric string (both accepted; normalized to an integer).",
+      "(string or number; numeric values are normalized to an integer).",
+    ),
   });
 
 /** Array-class parameter: every member is a string or a number. */
 const StringOrNumberArray = (opts: { description?: string } = {}) =>
   Type.Array(
-    Type.Union([Type.String(), Type.Number()], {
+    Type.Unsafe<string | number>({
+      type: [...STRING_OR_NUMBER_TYPE],
       description:
         "Member — string or number (both accepted; normalized to a string).",
     }),
-    opts.description ? { description: opts.description } : undefined,
+    opts.description
+      ? { description: withTypeHint(opts.description, "(each member is a string or number).") }
+      : undefined,
   );
 
 /**
