@@ -13,6 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - `jira_create_task`: labels array now always includes the `"plan"` label, regardless of whether the caller passed `args.labels` (was a regression risk when caller passed `labels=[]`).
 
+## [0.5.4] - 2026-10-26
+
+### Changed
+- **Registered tool schema no longer uses JSON Schema union keywords (CP-3767)** — the three parameter aliases (`IdParam` / `IntParam` / `StringOrNumberArray`) now emit a JSON Schema **type array** (`{ "type": ["string", "number"] }`, and `{ "type": ["number", "string"] }` for the pagination flavour) via `Type.Unsafe` instead of a TypeBox union.
+  - Why: a TypeBox union serializes to the JSON Schema union keyword `anyOf`, and the DeepSeek provider's tool-compat hook treats `anyOf` / `oneOf` as unsupported — it flattens the union down to its **first** variant (`selected = nonNullVariants[0]`). The schema the model sees (and the tool-call validation that runs against it) therefore collapsed back to a single type: `jira_get_comment.commentId` was string-only, `maxResults` was number-only. This is the root cause found in CP-3765 and the reason CP-3740's acceptance failed.
+  - A type array is not a union keyword, so the hook leaves it untouched — the model now genuinely sees "string or number" for every id-class, pagination-class and array-member field.
+  - The declared accept-set is unchanged: string or number. Objects, arrays and booleans are still rejected at the schema layer, and the handler-side normalization (`normalizeId` / `normalizeInt` / `normalizeStringArray`) is untouched.
+
+### Added
+- `src/index.test.ts` — CP-3767 schema-shape suite: asserts (a) no alias-driven field emits a union keyword, (b) every id-class field declares a `["string","number"]` type array and every pagination field a `["number","string"]` type array, (c) array-class fields declare type-array `items`, (d) the descriptions still state "string or number", and (e) the registered schemas survive the real DeepSeek tool-compat hook (`normalizeDeepSeekToolSchemas`) unchanged.
+- `src/index.test.ts` — CP-3767 value-layer suite: numeric / numeric-string / padded-string ids and pagination values are accepted, object / array values are still rejected.
+
+### Unchanged (deliberately)
+- `jira_submit_verdict.verdict` stays a TypeBox Literal union — the provider hook rewrites it to `{ "type": "string", "enum": ["PASS","FAIL"] }`, which is already correct.
+- Content fields (`body` / `summary` / `question` / `requirements` / `scope` / `acceptance_criteria` / `reason` / `description` / `jql` / `orderBy` / `since` / `targetStatus` / `verdict` / `label` / `filePath`) stay **strict**.
+- Handler normalization and rejection rules, tool return shapes, and the `details` wording are unchanged.
+
 ## [0.5.3] - 2026-10-25
 
 ### Added

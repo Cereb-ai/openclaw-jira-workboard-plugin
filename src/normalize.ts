@@ -14,8 +14,20 @@
  *
  * The fix is a two-layer contract:
  *   1. **Schema layer** (`src/index.ts`) — declares ID / pagination /
- *      array-member parameters as `Type.Union([Type.String(), Type.Number()])`
+ *      array-member parameters with a JSON Schema **type array**
+ *      (`{ "type": ["string", "number"] }`, emitted via `Type.Unsafe`)
  *      so the TypeBox validator stops rejecting the wrong guess.
+ *
+ *      CP-3767: this used to be a TypeBox union of string + number.
+ *      A TypeBox union serializes to a JSON Schema union keyword, which
+ *      the DeepSeek provider's tool-compat hook treats as unsupported —
+ *      it flattens the union down to its first variant, so the schema the
+ *      model sees (and the tool-call validation) collapsed back to a
+ *      single type (`commentId` → string only, `maxResults` → number
+ *      only). A type array survives that hook untouched, so the aliases
+ *      now emit `{ "type": ["string", "number"] }` instead. The declared
+ *      accept-set is unchanged: string or number, never an object / array
+ *      / boolean.
  *   2. **Handler layer** (this file) — every handler normalizes its
  *      parameters through these helpers before touching the REST layer,
  *      so downstream Atlassian calls always receive a clean
