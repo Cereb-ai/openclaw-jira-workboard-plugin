@@ -504,3 +504,23 @@ describe("CP-3767 — value layer still accepts string | number and rejects junk
     ).toBe(false);
   });
 });
+
+/* CP-4287 — jira_search `include` schema layer */
+describe("CP-4287 — jira_search include schema", () => {
+  it("AC-4287-S-1: include is an optional string array", () => {
+    expect(accepts("jira_search", { jql: "project = CP" })).toBe(true);
+    expect(accepts("jira_search", { jql: "project = CP", include: [] })).toBe(true);
+    expect(
+      accepts("jira_search", {
+        jql: "project = CP",
+        include: ["statusCategory", "assignee", "updated", "commentCount", "issuelinks"],
+      }),
+    ).toBe(true);
+  });
+
+  it("AC-4287-S-2: include rejects non-array / non-string members at the schema layer", () => {
+    expect(accepts("jira_search", { jql: "project = CP", include: "assignee" })).toBe(false);
+    expect(accepts("jira_search", { jql: "project = CP", include: [1] })).toBe(false);
+    expect(accepts("jira_search", { jql: "project = CP", include: [{ token: "a" }] })).toBe(false);
+  });
+});

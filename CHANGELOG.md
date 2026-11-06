@@ -5,6 +5,25 @@ All notable changes to `@cereb/jira-openclaw-plugin` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-06
+
+### Added
+- **`jira_search` opt-in rich fields (CP-4287)** — new optional `include` argument (array of tokens). Whitelist: `statusCategory` / `assignee` / `updated` / `commentCount` / `issuelinks`. Unknown tokens are rejected with an actionable error and **zero Jira calls** — never silently dropped.
+  - Each token is merged into the server-side `fields` query (union with the default / caller-supplied list), so `commentCount` really fetches `comment` on the wire instead of relying on a local guess.
+  - Requested keys are appended after `parent`, always in whitelist order:
+    - `statusCategory`: `fields.status.statusCategory.key` (`""` when absent).
+    - `assignee`: `{displayName, accountId}`, or `null` when unassigned.
+    - `updated`: Jira ISO timestamp, verbatim.
+    - `commentCount`: `fields.comment.total ?? fields.comment.comments.length ?? 0`.
+    - `issuelinks`: compact `{blocks:[{key,statusCategory}], blockedBy:[...]}` — identical to `jira_get`.
+  - Omitting `include` (or passing `[]`) keeps the output **byte-identical to 0.5.4** (exactly 8 keys, same order, unchanged wire fields).
+
+### Changed
+- `compactIssueLinks` moved from `src/handlers/get.ts` to `src/handlers/_issuelinks.ts` and is now shared by `jira_get` and `jira_search` — one parser, no second copy (CP-4287 AC4). `jira_get` output is unchanged.
+
+### Tests
+- `src/handlers/search.test.ts`: 12 new cases covering the include whitelist (unknown / non-array → error with zero `jiraGet` calls), the byte-identical default path, rich-value extraction from real Jira fields, wire-level `comment` merge, explicit-`fields` union without duplicates, and `issuelinks` parity with `jira_get`.
+
 ## [Unreleased]
 
 ### Changed

@@ -67,7 +67,7 @@ jira-tool --help
 
 | tool | 用途 | 必填 | 常用选填 |
 |---|---|---|---|
-| `jira_search` | JQL 搜索 (默认 30 条) | `jql` | `maxResults`, `fields` |
+| `jira_search` | JQL 搜索 (默认 30 条) | `jql` | `maxResults`, `fields`, `include` (CP-4287 富字段 opt-in) |
 | `jira_get` | 读单 ticket 详情 (默认走白名单, 含 attachment 最新 5 个) | `issueIdOrKey` | `fields` |
 | `jira_list_comments` | 拉 ticket 全部评论 (ADF → 纯文本 + mentions) | `issueIdOrKey` | `startAt`, `maxResults` (≤100, 超限自动 clamp), `orderBy`, `since` (ISO date, 客户端 filter), `authorAccountId` (客户端 filter) |
 | `jira_get_comment` | 读单条评论 (ADF → 纯文本 + mentions) | `issueIdOrKey`, `commentId` (string 或 number) | — |
@@ -436,6 +436,18 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 **CP-2384 说明**: 默认 `fields` **去掉** `issuelinks` (search callers 一般只需要 triage 元数据, issuelinks 留给 `jira_get` 按需拉); 请求回声只留 `jql`, 砍 `maxResults` / `fields` 字段.
 
 **CP-2693 batch 1 — `fields` silent-drop 修正**: `fields` 参数**仅用于服务端收窄拉取** (降 wire token); 显式传白名单外字段 (如 `["description"]` / `["customfield_*"]`) **不会**扩展返回 — formatIssues 固定只输出 8 字段. 需要 description / customfield_* 等白名单外字段 → 调 `jira_get { fields: [...] }` 单票逃生舱. `details` = <100 字符一句话摘要, 例 `JQL 命中 12 票, 本次返回 3 票`.
+
+**CP-4287 (0.6.0) — opt-in `include` 富字段**: `include?: string[]`, 白名单 `statusCategory` / `assignee` / `updated` / `commentCount` / `issuelinks`. 未知 token → 报错且**零 Jira 调用** (绝不静默丢弃). 每个 token 自动并入服务端 `fields` (并集; `commentCount` 实际拉 `comment`, 非本地推算). 请求的键按白名单顺序追加在 `parent` 之后:
+
+| token | 输出键 | 取值 |
+|---|---|---|
+| `statusCategory` | `statusCategory` | `fields.status.statusCategory.key`, 缺失 `""` |
+| `assignee` | `assignee` | `{displayName, accountId}` 或 `null` |
+| `updated` | `updated` | Jira ISO 原样 |
+| `commentCount` | `commentCount` | `fields.comment.total ?? comments.length ?? 0` |
+| `issuelinks` | `issuelinks` | `{blocks:[{key,statusCategory}], blockedBy:[...]}`, 与 `jira_get` 同一解析 (`src/handlers/_issuelinks.ts`) |
+
+不传 `include` 或传 `[]` → 输出与 0.5.4 逐字节一致 (8 键, 顺序不变, wire `fields` 不变).
 
 ### `jira_create_task` 返回契约 (CP-2693 batch 1 新增)
 
