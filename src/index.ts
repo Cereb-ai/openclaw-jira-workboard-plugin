@@ -152,7 +152,7 @@ export default defineToolPlugin({
       name: "jira_search",
       label: "Jira Search",
       description:
-        "JQL search. Default 30 results. Returns {ok, method, request{jql}, total, count, issues[]}. Each issue is whitelisted to 8 fields: key/id/summary/status/issuetype/labels/created/parent. total = JQL 命中总数, count = 本次返回条数. fields 参数仅用于服务端收窄拉取 (降 token), 返回字段集固定不变; 需要 description / customfield_* 等白名单外字段 → 用 jira_get 单票获取. details = <100 字符一句话摘要.",
+        "JQL search. Default 30 results. Returns {ok, method, request{jql}, total, count, issues[]}. Each issue is whitelisted to 8 fields: key/id/summary/status/issuetype/labels/created/parent. total = JQL 命中总数, count = 本次返回条数. fields 参数仅用于服务端收窄拉取 (降 token), 返回字段集固定不变; 需要 description / customfield_* 等白名单外字段 → 用 jira_get 单票获取. Optional `include` (CP-4287) opts into rich fields: statusCategory / assignee / updated / commentCount / issuelinks; omitted or [] keeps the byte-identical 8-field output. details = <100 字符一句话摘要.",
       parameters: Type.Object({
         jql: Type.String({ description: "JQL query string" }),
         maxResults: Type.Optional(
@@ -160,6 +160,12 @@ export default defineToolPlugin({
         ),
         fields: Type.Optional(
           StringOrNumberArray({ description: "Fields to include" }),
+        ),
+        include: Type.Optional(
+          Type.Array(Type.String(), {
+            description:
+              "Opt-in rich fields (CP-4287). Allowed tokens: statusCategory | assignee | updated | commentCount | issuelinks. Each token is merged into the server-side fields list (e.g. commentCount fetches comment); unknown tokens are rejected with zero Jira calls. Omitted / [] → byte-identical to the default 8-field output.",
+          }),
         ),
       }),
       async execute(params, config) {
