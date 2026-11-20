@@ -5,6 +5,24 @@ All notable changes to `@cereb/jira-openclaw-plugin` are documented in this file
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-11-20
+
+### Added
+- **`jira_upload_attachment`: cross-sandbox byte sources `url` and `base64` (CP-5107)** — the tool used to only accept a `filePath` readable on the gateway host, so artifacts produced inside an e2e-runner Job / coder sandbox could never be uploaded (a 404 was guaranteed and evidence upload degraded to "comment text + link"). Two new entry points:
+  - `url` (preferred): http/https URL. The gateway downloads the bytes itself (streaming, aborted as soon as the 100 MB cap is crossed), so the file never has to exist on the gateway filesystem. Filename = basename of the URL path (percent-decoded), overridable with an explicit `filename`. Non-http(s) schemes → 400. Download failures (non-2xx / network error) → **502** carrying the target URL (truncated) plus the upstream status / reason — never a misleading 404.
+  - `base64`: base64 payload, optionally with a `data:<mime>;base64,` prefix (whitespace/newlines tolerated). Requires an explicit `filename` — missing → 400, never a silently generated name. Oversize is detected from the arithmetic decoded length, before any Buffer is allocated.
+  - New optional `filename` argument: required with `base64`, overrides the URL-path basename with `url`, ignored with `filePath`.
+
+### Changed
+- `jira_upload_attachment` source validation (CP-5107): `filePath` / `url` / `base64` are **mutually exclusive**; zero sources or more than one → 400 listing the available sources (never a silent pick). The 100 MB cap now applies uniformly (`filePath`: stat size / `url`: actual downloaded bytes / `base64`: decoded length) and the 413 message carries the actual byte count.
+- `jira_upload_attachment` 404 diagnostics (CP-5107): the `file not found: <path>` prefix is kept (0.6.0 consumers that match on it keep working), and the message now states that `filePath` must be an absolute path readable **on the gateway host**, that sandbox-local paths are not readable, and points at `url` / `base64`.
+
+### Unchanged (deliberately)
+- `filePath` success behaviour and return contract: identical field-by-field to 0.6.0 (same compact 5-field `attachments[]`, `request` = `{issueIdOrKey}` only, same `details` wording).
+
+### Tests
+- `src/handlers/upload_attachment.test.ts`: 15 new cases covering url happy path (zero filesystem access, bytes uploaded verbatim), url naming / override, base64 (data URL + plain, newlines), base64 missing filename, mutual exclusion, no source, non-http(s) scheme, 100 MB cap for all three sources (content-length, chunked download, decoded base64), unreadable-path diagnostics, url 404 / network-error diagnostics, and a byte-identical `filePath` success contract check.
+
 ## [0.6.0] - 2026-11-06
 
 ### Added
