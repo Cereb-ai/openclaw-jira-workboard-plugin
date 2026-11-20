@@ -22,6 +22,8 @@ jira_search { jql: "project = <project-key> AND status != Done" }
 jira_get { issueIdOrKey: "<issue-key>" }
 jira_create_task { project: "WTO", summary: "...", requirements: "...", scope: "...", acceptance_criteria: "..." }
 jira_upload_attachment { issueIdOrKey: "<issue-key>", filePath: "/path/to/x.png" }
+jira_upload_attachment { issueIdOrKey: "<issue-key>", url: "https://storage.example.com/signed/x.png" }
+jira_upload_attachment { issueIdOrKey: "<issue-key>", base64: "iVBORw0...", filename: "x.png" }
 ```
 
 **路径 B — 非 OpenClaw 原生 agent（codex 等，无 MCP 工具暴露）**：用 `jira-tool` 二进制。**方法名与 MCP 100% 对齐**——`jira_*` 全名和短名（search/get/comment/...）都接受，参数与 MCP 工具完全一致：
@@ -32,6 +34,8 @@ jira-tool jira_get '{"issueIdOrKey":"<issue-key>"}'
 jira-tool jira_create_task '{"project":"WTO","summary":"...","requirements":"...","scope":"...","acceptance_criteria":"..."}'
 jira-tool jira_submit_verdict '{"issueIdOrKey":"<issue-key>","verdict":"PASS","summary":"done"}'
 jira-tool jira_upload_attachment '{"issueIdOrKey":"<issue-key>","filePath":"/path/to/x.png"}'
+jira-tool jira_upload_attachment '{"issueIdOrKey":"<issue-key>","url":"https://storage.example.com/signed/x.png"}'
+jira-tool jira_upload_attachment '{"issueIdOrKey":"<issue-key>","base64":"iVBORw0...","filename":"x.png"}'
 # 短名同样可用（向后兼容）：
 jira-tool search '{"jql":"project = <project-key> AND status != Done"}'
 jira-tool get '{"issueIdOrKey":"<issue-key>"}'
@@ -74,7 +78,7 @@ jira-tool --help
 | `jira_comment` | 给 ticket 加评论 (**纯文本 string**) | `issueIdOrKey`, `body` (string) | `mentionAccountIds` (string[] of accountIds) |
 | `jira_list_attachments` | 列 ticket 所有附件 metadata (无 cap) | `issueIdOrKey` | — |
 | `jira_get_attachment` | 下载附件二进制到本地 (默认 `/tmp/openclaw-attachments/{id}.{ext}`) | `attachmentId` | `saveToPath` (绝对路径) |
-| **`jira_upload_attachment`** | **上传单个文件到 ticket (server-side read, 无需 base64 编码)** | `issueIdOrKey`, `filePath` (绝对路径) | — |
+| **`jira_upload_attachment`** | **上传单个文件到 ticket (三选一来源: `filePath` / `url` / `base64`)** | `issueIdOrKey` + `filePath` (gateway 可见绝对路径) 或 `url` (http/https) 或 `base64` (+ 必填 `filename`) | — |
 | `jira_transition` | 转 ticket 状态 (**逻辑名**，项目无关) | `issueIdOrKey`, `targetStatus` (逻辑名) | — |
 
 ### 原子任务操作 (5)
@@ -167,10 +171,16 @@ jira_transition { issueIdOrKey: "CP-1",    targetStatus: "In Review" }     // �
 ### 场景 9: 上传附件 (0.5.1 新增, 替代裸 curl workaround)
 
 ```
-// 上传单个文件
+// 来源 1: filePath — gateway 主机本地可读的绝对路径 (0.5.1 起的原行为)
 jira_upload_attachment { issueIdOrKey: "<issue-key>", filePath: "/path/to/screenshot.png" }
 
-// 上传多个文件 (换 filePath 重复调用即可)
+// 来源 2 (跨沙箱首选): url — gateway 侧自己下载 http/https, 文件无需落在 gateway 本机
+jira_upload_attachment { issueIdOrKey: "<issue-key>", url: "https://storage.googleapis.com/bucket/evidence.png?X-Goog-Signature=..." }
+
+// 来源 3: base64 / data URL — 小文件, 必须显式 filename
+jira_upload_attachment { issueIdOrKey: "<issue-key>", base64: "data:image/png;base64,iVBORw0...", filename: "evidence.png" }
+
+// 上传多个文件 (换来源重复调用即可)
 jira_upload_attachment { issueIdOrKey: "<issue-key>", filePath: "/path/to/evidence.png" }
 ```
 
@@ -189,15 +199,21 @@ jira_upload_attachment { issueIdOrKey: "<issue-key>", filePath: "/path/to/eviden
 
 **失败返回** (结构化错误):
 ```json
-{ "ok": false, "error": { "status": 404, "message": "file not found: /tmp/missing.png" } }
-{ "ok": false, "error": { "status": 413, "message": "file too large (>100MB)" } }
+{ "ok": false, "error": { "status": 400, "message": "upload_attachment accepts exactly one source: `filePath` | `url` | `base64` (got: filePath, url)." } }
+{ "ok": false, "error": { "status": 400, "message": "`base64` requires an explicit `filename` (string) — there is nothing to derive a name from." } }
+{ "ok": false, "error": { "status": 404, "message": "file not found: /tmp/missing.png (ENOENT...). filePath must be an absolute path readable on the gateway host — sandbox-local paths are NOT readable (路径必须在 gateway 主机可见; 沙箱内本地路径不可读). Use `url` (http/https) or `base64` + `filename` instead." } }
+{ "ok": false, "error": { "status": 413, "message": "file too large: 105906176 bytes (max 104857600)" } }
+{ "ok": false, "error": { "status": 502, "message": "url download failed: https://... → HTTP 404 Not Found" } }
 { "ok": false, "error": { "status": 401, "message": "..." } }
 ```
 
 **约束**:
-- 单文件最大 100MB (Jira 默认上限)
-- filePath 必须是 server-side 可读的绝对路径
-- 不需要 base64 编码, plugin 用 Node 内置 FormData + Blob 直传
+- 单文件最大 100MB (Jira 默认上限), 三个来源一致生效 (filePath: stat.size / url: 实际下载字节 / base64: 解码后长度); 超限 413 带实际字节数
+- 三个来源 **互斥**, 每次调用只能给一个; 都不给或多于一个 → 400 且消息列出可用入参
+- 命名: `filePath` → `basename(filePath)`; `url` → URL path 的 basename (可被显式 `filename` 覆盖); `base64` → 显式 `filename` (必填, 不会静默生成)
+- `url` 仅接受 http/https (其他 scheme → 400); 下载非 2xx / 网络错误 → 502, 消息含目标 URL (截断) 与状态码/原因, **不**误报为「文件不存在」
+- **沙箱内本地路径不可用**: `filePath` 必须是 **gateway 主机可见**的绝对路径。e2e-runner Job / coder 沙箱里的产物 → 先把文件暴露成 http/https (如 GCS signed URL) 走 `url`, 或小文件走 `base64`
+- plugin 用 Node 内置 FormData + Blob 直传, agent 不用自己拼 multipart 边界
 - 不再需要 agent 自己读 `~/.openclaw/openclaw.json` 拿 ATST_TOKEN + 拼 multipart 边界
 
 **何时用**: 之前用 `curl -X POST ... -F file=@...` 上传附件的 workaround 全部废弃, 改调 `jira_upload_attachment` 即可。
@@ -694,10 +710,12 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 | 字段 | 类型 | 含义 |
 |---|---|---|
 | `ok` | `false` | 失败标记 |
-| `error.status` | `number` | synthetic 状态: 404 (missing file) / 413 (oversize, >100MB) / 500 (misc) / upstream HTTP 4xx/5xx 透传 |
+| `error.status` | `number` | synthetic 状态: 400 (来源缺失/互斥/非法 scheme/ base64 缺 filename) / 404 (gateway 读不到 filePath) / 413 (三来源任一超 100MB) / 502 (url 下载失败: 非 2xx / 网络错) / 500 (misc) / upstream HTTP 4xx/5xx 透传 |
 | `error.message` | `string` | 错误信息 (synthetic message 文本逐字保留 / 上游 `HTTP <status> <statusText>: <body>` 透传前 500 字符) |
 
 **CP-2715 batch 4**: 旧 `summary{issueIdOrKey, filePath, filename, size, attachmentCount}` 块去除 (5 字段全部与 request / 顶层 / attachments 重复; `filePath` 全路径重复 2 次可上百字符, 是 12 工具单点最大体积冗余). `request.filePath` / `request.size` / `request.filename` 回声去除 (仅留 `request.issueIdOrKey` 锚). `attachments` 数组**逐项显式 pick 5 字段** (`id` / `filename` / `size` / `mimeType` / `content`), 防止 Atlassian 原始项 `author` / `created` / `self` / `thumbnail` / `metadata` 等混入. `attachmentCount` 由派生 `count: items.length` 替换 (去重 — 旧 `count == attachments.length == summary.attachmentCount` 原本就是 3-way 重复). 错误对象 `{ok:false, error:{status,message}}` 与 synthetic status (404 missing file / 413 oversize / 500 misc) 语义完整保留; 上游 HTTP 4xx/5xx 透传 `res.status` 0 改动. `MAX_FILE_SIZE = 100 * 1024 * 1024` (100 MB) 输入侧 cap 0 改动. 8 个 textResult 调用点 (L53/L58/L69/L82/L92/L121/L132/L151) 全部双参且 `details` <100 字符. `details` = <100 字符一句话摘要, 例 `已上传 screenshot.png (12345 字节) 至 SSSS-454` / `jira_upload_attachment 失败: 文件不存在 /tmp/x.png` / `jira_upload_attachment 失败: 文件超 100MB (104857601 字节)` / `jira_upload_attachment 失败: HTTP 401`.
+
+**CP-5107 — 跨沙箱入口 (`url` / `base64`)**: 新增两个口子, 三来源互斥, 成功契约与 filePath 行为不变 (成功体/命名/details 逐字未改, 旧单测 11 条全绿). `url` 在 gateway 进程内用 `fetch` 下载 (流式, 超 100MB 立即 abort 并 413), 文件名 = URL path 的 basename (percent-decode, 可被显式 `filename` 覆盖), 非 http/https → 400; 下载失败 → **502** 且消息含目标 URL (截断 120 字符) + 上游状态码/原因, 不再误报 404 not found. `base64` 兼容 `data:<mime>;base64,` 前缀与换行, **必须**显式 `filename` (缺失 → 400, 不静默生成), 超限判定用解码后长度算术值 (不先分配 Buffer). `filePath` 不可读时 404 消息在保留 `file not found: <path>` 前缀的同时追加「必须 gateway 主机可见 / 沙箱内本地路径不可读」与改用 `url` / `base64` 的指引.
 
 ### 反断言 (本次不动)
 

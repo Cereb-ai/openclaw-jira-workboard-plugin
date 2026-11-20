@@ -33,6 +33,8 @@
  *   jira-tool jira_list_attachments '{"issueIdOrKey":"WTO-100"}'
  *   jira-tool jira_get_attachment '{"attachmentId":"10001"}'
  *   jira-tool jira_upload_attachment '{"issueIdOrKey":"WTO-100","filePath":"/tmp/x.png"}'
+ *   jira-tool jira_upload_attachment '{"issueIdOrKey":"WTO-100","url":"https://storage.example.com/signed/x.png"}'
+ *   jira-tool jira_upload_attachment '{"issueIdOrKey":"WTO-100","base64":"iVBORw0...","filename":"x.png"}'
  *   jira-tool jira_create_task '{"project":"WTO","summary":"...","requirements":"...","scope":"...","acceptance_criteria":["..."]}'
  *   jira-tool jira_create_subtask '{"project":"WTO","parent":"WTO-100","summary":"...","requirements":"...","scope":"...","acceptance_criteria":["..."],"labels":["code"]}'
  *   jira-tool jira_submit_verdict '{"issueIdOrKey":"WTO-100","verdict":"PASS","summary":"done"}'

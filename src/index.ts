@@ -459,13 +459,33 @@ export default defineToolPlugin({
       name: "jira_upload_attachment",
       label: "Jira Upload Attachment",
       description:
-        "Upload a single local file to an issue (max 100 MB). Returns {ok, method, request{issueIdOrKey}, count, attachments[{id, filename, size, mimeType, content}]}. filePath is NOT echoed. On failure: {ok:false, error:{status, message}} with synthetic status (404 missing file / 413 oversize / 500 misc). details = one-line summary.",
+        "Upload a single file to an issue (max 100 MB). Exactly ONE byte source must be given (they are mutually exclusive): `filePath` (absolute path readable on the GATEWAY host — sandbox-local paths are not readable), `url` (http/https URL fetched by the gateway, the preferred cross-sandbox entry), or `base64` (base64 / data URL payload, small files only, requires an explicit `filename`). Naming: filePath → basename(filePath); url → basename of the URL path, overridable with `filename`; base64 → the explicit `filename`. Returns {ok, method, request{issueIdOrKey}, count, attachments[{id, filename, size, mimeType, content}]}. Sources are NOT echoed. On failure: {ok:false, error:{status, message}} with synthetic status (400 bad/missing/ambiguous source / 404 gateway cannot read filePath / 413 over 100MB / 502 url download failed / 500 misc). details = one-line summary.",
       parameters: Type.Object({
         issueIdOrKey: IdParam({ description: "Issue key like 'SSSS-454'" }),
-        filePath: Type.String({
-          description:
-            "Absolute path to the file to upload (server-side). Plugin reads from disk and uploads the bytes; the filename on Jira is basename(filePath).",
-        }),
+        filePath: Type.Optional(
+          Type.String({
+            description:
+              "Absolute path readable ON THE GATEWAY HOST. The plugin reads it from disk and uploads the bytes; the filename on Jira is basename(filePath). Sandbox-local paths (e2e-runner Job, coder sandbox) are NOT readable by the gateway — use `url` or `base64` instead.",
+          }),
+        ),
+        url: Type.Optional(
+          Type.String({
+            description:
+              "http/https URL. The gateway downloads the bytes itself (no file needed on the gateway filesystem) and uploads them. Filename = basename of the URL path, overridable with `filename`. Non-http(s) schemes are rejected.",
+          }),
+        ),
+        base64: Type.Optional(
+          Type.String({
+            description:
+              "Base64 payload, optionally with a `data:<mime>;base64,` prefix. Requires `filename`. Intended for small files only (decoded length counts against the 100 MB cap).",
+          }),
+        ),
+        filename: Type.Optional(
+          Type.String({
+            description:
+              "Explicit attachment filename. Required with `base64`; optional with `url` (overrides the URL-path basename); ignored with `filePath` (always basename(filePath)).",
+          }),
+        ),
       }),
       async execute(params, config) {
         applyConfig(config);

@@ -1,7 +1,7 @@
 # @cereb/jira-openclaw-plugin
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.5.3-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.7.0-blue.svg)](package.json)
 [![OpenClaw](https://img.shields.io/badge/OpenClaw-%3E%3D2026.5.17-purple.svg)](https://docs.openclaw.ai)
 
 OpenClaw native plugin for Jira Cloud REST API v3 — exposes 14 named tools (one per Jira REST method), each invocable directly from an OpenClaw agent or the bundled `jira-tool` CLI. Replaces the legacy single-dispatcher `atlassian.*` tool.
@@ -25,7 +25,7 @@ OpenClaw native plugin for Jira Cloud REST API v3 — exposes 14 named tools (on
 | `jira_comment` | post a comment (plain-text `body`, auto-wrapped to ADF) | `issueIdOrKey`, `body` |
 | `jira_list_attachments` | list attachment metadata for a ticket | `issueIdOrKey` |
 | `jira_get_attachment` | download one attachment's bytes | `attachmentId` |
-| `jira_upload_attachment` | upload a file to a ticket | `issueIdOrKey`, `file` |
+| `jira_upload_attachment` | upload a file to a ticket (exactly one source: `filePath` / `url` / `base64`) | `issueIdOrKey` + one of `filePath` / `url` / `base64` (+ `filename` with `base64`) |
 | `jira_transition` | transition ticket by target status (logical name) | `issueIdOrKey`, `targetStatus` |
 | `jira_create_task` | create main task (locked template + `plan` label + assignee) | `project`, `summary`, `requirements`, `scope`, `acceptance_criteria` |
 | `jira_create_subtask` | create subtask (locked template + label + assignee) | `project`, `parent`, `summary`, `requirements`, `scope`, `acceptance_criteria`, `labels` |
@@ -34,6 +34,24 @@ OpenClaw native plugin for Jira Cloud REST API v3 — exposes 14 named tools (on
 | `jira_request_help` | escalate main task to a human | `issueIdOrKey`, `question` |
 
 Per-tool argument schemas, ADF builder guide, and the 避坑清单 live in [`skills/jira/SKILL.md`](skills/jira/SKILL.md).
+
+### Uploading artifacts from another sandbox
+
+The gateway can only read files that exist on **its own** filesystem, so passing
+`filePath` for an artifact produced inside an e2e-runner Job or a coder sandbox
+always fails (the 404 message now says so). Two cross-sandbox entry points:
+
+1. **`url` (preferred)** — pass an http/https URL (e.g. a GCS signed URL). The
+   gateway downloads the bytes itself and uploads them; the file never has to
+   exist on the gateway filesystem. Filename = basename of the URL path,
+   overridable with `filename`. Non-http(s) schemes are rejected with a 400.
+2. **`base64`** — pass a base64 payload (a `data:<mime>;base64,` prefix is
+   accepted) **plus an explicit `filename`**. Intended for small files.
+
+`filePath` / `url` / `base64` are **mutually exclusive** (exactly one per call —
+zero sources or several sources return a 400 that lists the options) and share
+the same 100 MB cap (413 carries the actual byte count). Naming:
+`basename(filePath)` / URL-path basename (overridable) / the explicit `filename`.
 
 ## Installation
 
