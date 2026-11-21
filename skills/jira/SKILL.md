@@ -216,6 +216,32 @@ jira_upload_attachment { issueIdOrKey: "<issue-key>", filePath: "/path/to/eviden
 - plugin 用 Node 内置 FormData + Blob 直传, agent 不用自己拼 multipart 边界
 - 不再需要 agent 自己读 `~/.openclaw/openclaw.json` 拿 ATST_TOKEN + 拼 multipart 边界
 
+**来源选择 ❌ / ✅** (沙箱内 agent 必读):
+
+```
+// ❌ 错误: 把沙箱内本地路径当 filePath —— gateway 读不到, 404 + 指引原文
+jira_upload_attachment { issueIdOrKey: "CP-5321",
+  filePath: "/home/node/tickets/CP-5299/runs/attempt-1/REPORT.md" }
+→ { ok: false, error: { status: 404, message: "file not found: /home/node/tickets/... (ENOENT: ...).
+    filePath must be an absolute path readable on the gateway host — sandbox-local paths are NOT
+    readable (路径必须在 gateway 主机可见; 沙箱内本地路径不可读). Use `url` (http/https) or
+    `base64` + `filename` instead." } }
+
+// ✅ 1) url: 产物先暴露成公网可达 http/https (如 GCS signed URL), gateway 自己下载后上传
+jira_upload_attachment { issueIdOrKey: "CP-5321",
+  url: "https://storage.googleapis.com/bucket/cp5321-evidence.bin?X-Goog-Signature=..." }
+
+// ✅ 2) base64 + filename: 小文件 (内存生成 / 未落盘), 显式 filename 必填
+jira_upload_attachment { issueIdOrKey: "CP-5321",
+  base64: "data:text/plain;base64,U1VNTUFSWQ==", filename: "summary.txt" }
+
+// ✅ 3) 网关可见路径: 文件先落到 gateway 主机, 再走 filePath (命名 = basename)
+jira_upload_attachment { issueIdOrKey: "CP-5321",
+  filePath: "/tmp/planner/CP-5321/cp5321-6mb-evidence.bin" }
+```
+
+大文件 (≥5MB) 只能走 `url` 或网关可见路径 —— 依据见 README「Large files (≥ 5 MB)」小节.
+
 **何时用**: 之前用 `curl -X POST ... -F file=@...` 上传附件的 workaround 全部废弃, 改调 `jira_upload_attachment` 即可。
 
 ---
@@ -538,7 +564,7 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 | `size` | `number` | 字节数 |
 | `mimeType` | `string` | MIME 类型 |
 | `created` | `string` | 上传时间 |
-| `content` | `string` | 下载 URL (api.media.atlassian.com, 不含文件字节) |
+| `content` | `string` | REST 下载路径 (实测形态 `https://api.atlassian.com/ex/jira/<cloudId>/rest/api/3/attachment/content/<id>`, 不含文件字节; 取字节请用 `jira_get_attachment`) |
 | `thumbnail` | `string?` | 缩略图 URL |
 | `author.displayName` | `string` | 上传者 displayName |
 | `author.accountId` | `string` | 上传者 accountId (红线 #28510: 保留) |
@@ -700,10 +726,10 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 | 字段 | 类型 | 含义 |
 |---|---|---|
 | `id` | `string` | Atlassian 附件 id |
-| `filename` | `string` | 上传的文件名 (= `basename(filePath)`) |
+| `filename` | `string` | 上传的文件名; 三来源口径: `filePath` = `basename(filePath)`; `url` = URL path 的 basename (percent-decode, 可被显式 `filename` 覆盖); `base64` = 显式 `filename` (必填) |
 | `size` | `number` | 文件字节数 (来自 Atlassian 上传响应) |
 | `mimeType` | `string` | MIME 类型 |
-| `content` | `string` | 下载 URL (api.media.atlassian.com, 不含文件字节) |
+| `content` | `string` | REST 下载路径 (实测形态 `https://api.atlassian.com/ex/jira/<cloudId>/rest/api/3/attachment/content/<id>`, 不含文件字节; 取字节请用 `jira_get_attachment`) |
 
 **错误** (既有契约, CP-2715 红线 0 改动):
 
@@ -724,7 +750,7 @@ jira_get_comment { issueIdOrKey: "<issue-key>", commentId: "10001" }
 - **`jira_search` 的 `fields` 仅服务端收窄, 不扩展返回集**: 显式传 `["description"]` / `["customfield_*"]` 等白名单外字段会被静默丢弃 (formatIssues 固定 8 字段). 需要这些字段 → 走 `jira_get { fields: [...] }` 单票逃生舱.
 - **错误路径仍走 `error` 字段**: 14 个高频工具任何 4xx / 5xx / 网络错 都返回 `{error: "jira.<method> failed: ..."}` (12 个查询/状态机写工具) 或 `{ok:false, error:{status,message}}` (2 个 upload_attachment / 关联工具的合成错误结构, 含 synthetic status 404/413/500), **不**走 result feedback 路径. **CP-2715 batch 4**: 2 个附件传输工具的合成错误对象 shape 完整保留 — `{ok:false, error:{status,message}}` 结构与 status 语义 (404 missing file / 413 oversize / 500 misc) 0 改动, 仅 `details` 第二参补充 <100 字符一句话摘要.
 - **`jira_get_comment` 的 `body` 不截断**: 必须保持 — 这是 list_comments 500-char 截断的全文逃生舱; description 声明 NEVER truncated.
-- **`jira_list_attachments` 不含文件内容**: 字节走 `jira_get_attachment`; attachments[] 项 `content` 字段是下载 URL (api.media.atlassian.com), 不是文件字节.
+- **`jira_list_attachments` 不含文件内容**: 字节走 `jira_get_attachment`; attachments[] 项 `content` 字段是 REST 下载路径 (`https://api.atlassian.com/ex/jira/<cloudId>/rest/api/3/attachment/content/<id>`), 不是文件字节.
 - **CP-2710 batch 3 状态机写工具 partial 分支结构 0 改动**: `submit_verdict` / `abandon_task` / `request_help` 三个 partial 分支 (4 个 partial 路径) 字段集合 / 顺序 / 命名 / hint 文案 完整保留 (CP-2710 红线 #28510); 仅 `details` 字段从 dict 摘要 (与 content 等大) 改为 <100 字符 string.
 - **CP-2710 batch 3 author.accountId / mentions 保留**: `jira_request_help` 的 `mentioned` 字段含 accountId (红线 #28510: accountId 不删), 写 partial 路径也保留 `comment` 含 author 信息; `jira_submit_verdict` 评论 author 由 server 端生成, 路径不涉及.
 - **CP-2710 batch 3 verdict / label / assigneeCleared 语义与执行顺序 0 改动**: `submit_verdict` FAIL 路径仍先 comment → 后 label → 后 clear assignee; PASS 路径仍先 comment → 后 transition; `abandon_task` 5 步顺序不变; `request_help` 3 步顺序不变.

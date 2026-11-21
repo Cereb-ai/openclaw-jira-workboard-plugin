@@ -39,19 +39,37 @@ Per-tool argument schemas, ADF builder guide, and the 避坑清单 live in [`ski
 
 The gateway can only read files that exist on **its own** filesystem, so passing
 `filePath` for an artifact produced inside an e2e-runner Job or a coder sandbox
-always fails (the 404 message now says so). Two cross-sandbox entry points:
+always fails with a 404 that says so. The gateway reaches other sandboxes over
+HTTP, not over a shared filesystem:
 
-1. **`url` (preferred)** — pass an http/https URL (e.g. a GCS signed URL). The
-   gateway downloads the bytes itself and uploads them; the file never has to
-   exist on the gateway filesystem. Filename = basename of the URL path,
-   overridable with `filename`. Non-http(s) schemes are rejected with a 400.
-2. **`base64`** — pass a base64 payload (a `data:<mime>;base64,` prefix is
-   accepted) **plus an explicit `filename`**. Intended for small files.
+#### Choosing a source
 
-`filePath` / `url` / `base64` are **mutually exclusive** (exactly one per call —
-zero sources or several sources return a 400 that lists the options) and share
-the same 100 MB cap (413 carries the actual byte count). Naming:
-`basename(filePath)` / URL-path basename (overridable) / the explicit `filename`.
+| source | when to use | resulting `filename` | gateway-local file needed |
+|---|---|---|---|
+| `filePath` | the bytes already exist **on the gateway host** | `basename(filePath)` | yes |
+| `url` | artifact lives in another sandbox / Job / CI — the **preferred** cross-sandbox path | basename of the URL path (percent-decoded), overridable with `filename` | no |
+| `base64` | tiny payloads generated in memory | the explicit `filename` (**required** — nothing to derive it from) | no |
+
+All three sources are **mutually exclusive** (exactly one per call — zero
+sources or several return a 400 that lists the options) and share the same
+100 MB cap (413 carries the actual byte count). Non-http(s) `url` schemes are
+rejected with a 400; a failed download returns 502 (not a misleading 404).
+
+#### Large files (≥ 5 MB): use `url`, never `base64`
+
+`base64` is only viable for small payloads. 5 MB of bytes becomes **6,990,508**
+base64 characters (5,242,880 / 3 → 1,747,627 groups × 4), which is already
+above `getconf ARG_MAX` = **2,097,152** bytes — a `jira-tool` CLI invocation
+would fail with `E2BIG`, and pushing a ~7 MB string through MCP arguments is
+equally impractical. So for ≥ 5 MB:
+
+- use `url` (http/https, e.g. a GCS signed URL), or
+- use `filePath` **only if** the file genuinely lands on the gateway host.
+
+An agent inside a sandbox has no shared volume with the gateway, so `url` is
+effectively its only option at that size. The URL must be publicly reachable:
+the gateway cannot reach a sandbox Pod IP directly (CP-5113 measured 502), so
+in-cluster addresses do not work.
 
 ## Installation
 
